@@ -1,0 +1,6 @@
+add_executable(test_ipmath test_ipmath.c ${CMAKE_SOURCE_DIR}/src/core/util.c)
+include_directories(${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/core)
+if(WIN32)
+  target_link_libraries(test_ipmath ws2_32)
+endif()
+add_test(NAME ipmath COMMAND test_ipmath)

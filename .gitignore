@@ -1,0 +1,10 @@
+build/
+*.o
+*.exe
+vault.dat
+vault.dat.tmp
+audit.log
+lanmgr.log
+config.json
+*.dll
+_dl/

@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>lanmgr · 局域网管理系统</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+  <h1>lanmgr <span id="ver"></span></h1>
+  <div class="hd">
+    <button id="btn-rescan">重新扫描</button>
+    <span id="status" class="badge"></span>
+  </div>
+</header>
+
+<main>
+  <section class="panel">
+    <h2>局域网拓扑 <span id="gw" class="dim"></span></h2>
+    <div id="tree" class="tree"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Agent 提供方 <span class="dim">（CC Switch 风格：调用/请求地址/模型/Key 本地配置）</span></h2>
+    <div id="prov-list"></div>
+    <div class="row">
+      <input id="prov-name" placeholder="名称(如 deepseek)">
+      <input id="prov-base" placeholder="调用地址 base_url(如 https://api.deepseek.com)">
+    </div>
+    <div class="row">
+      <input id="prov-endpoint" placeholder="请求地址 endpoint(如 /v1/chat/completions)">
+      <input id="prov-model" placeholder="模型(如 deepseek-chat)">
+      <button id="btn-prov">保存提供方</button>
+    </div>
+    <div class="row">
+      <input id="prov-key-name" placeholder="设置 Key 的提供方名">
+      <input id="prov-key" type="password" placeholder="API Key">
+      <button id="btn-prov-key">设置 API Key(加密)</button>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Agent 助手 <span class="dim">（API Key 接入，只提需求）</span></h2>
+    <textarea id="agent-req" rows="2" placeholder="例如：ping 一下 192.168.31.1，或在 .59 上执行 whoami"></textarea>
+    <button id="btn-agent">提交需求</button>
+    <pre id="agent-out" class="out"></pre>
+  </section>
+
+  <section class="panel">
+    <h2>执行命令 <span class="dim">（所有变更类操作均需人工确认）</span></h2>
+    <div class="row">
+      <select id="exec-mode"><option value="local">本机</option><option value="remote">远程(SSH)</option></select>
+      <input id="exec-ip" placeholder="IP（远程必填）" value="192.168.31.59">
+      <select id="exec-cred"></select>
+      <label class="chk"><input type="checkbox" id="exec-sudo"> sudo 提权</label>
+    </div>
+    <div class="row">
+      <input id="exec-cmd" placeholder="命令" value="whoami">
+      <button id="btn-exec">执行</button>
+    </div>
+    <pre id="exec-out" class="out"></pre>
+  </section>
+
+  <section class="panel">
+    <h2>凭据管理 <span class="dim">（用户名与密码均 DPAPI 加密存储）</span></h2>
+    <div class="row">
+      <input id="cred-label" placeholder="标签">
+      <input id="cred-target" placeholder="目标 host/URI">
+      <select id="cred-type"><option value="ssh">ssh</option><option value="winrm">winrm</option><option value="http">http</option><option value="apitoken">apitoken</option></select>
+    </div>
+    <div class="row">
+      <input id="cred-user" placeholder="用户名">
+      <input id="cred-secret" type="password" placeholder="密码 / 密钥">
+      <button id="btn-cred">保存</button>
+    </div>
+    <ul id="cred-list" class="credlist"></ul>
+  </section>
+</main>
+
+<div id="modal" class="modal hidden">
+  <div class="modal-box">
+    <h2>⚠ 风险操作确认</h2>
+    <p id="modal-level" class="badge"></p>
+    <p id="modal-summary"></p>
+    <p class="hint">由用户决定：批准执行 / 拒绝。超时未确认将自动拒绝。</p>
+    <div class="modal-actions">
+      <button id="btn-deny">拒绝</button>
+      <button id="btn-approve" class="danger">批准执行</button>
+    </div>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>

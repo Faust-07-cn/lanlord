@@ -1,0 +1,17 @@
+{
+  "port": 8686,
+  "scan_max_hosts": 256,
+  "scan_timeout_ms": 400,
+  "confirm_timeout_s": 120,
+  "store_plaintext": false,
+  "agent": {
+    "max_turns": 10,
+    "timeout_s": 60
+  },
+  "vault_path": "vault.dat",
+  "audit_path": "audit.log",
+  "log_path": "lanmgr.log",
+  "web_root": "web",
+  "providers_path": "providers.json",
+  "apikeys_path": "apikeys.dat"
+}
