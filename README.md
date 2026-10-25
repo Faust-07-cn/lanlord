@@ -60,7 +60,7 @@ demo 阶段用网页预览；正式使用时通过 Inno Setup 打包为桌面安
     third_party/cJSON                         tests/   单元测试
     packaging/installer.iss                  scripts/ 编译/引导脚本
 
-## Agent 提供方配置（CC Switch 风格）
+## Agent 提供方配置
 
 API Key 与设备凭据分离、独立加密存储：
 
