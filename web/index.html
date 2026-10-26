@@ -3,41 +3,23 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>lanmgr · 局域网管理系统</title>
+<title>lanlord · 局域网管理系统</title>
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
 <header>
-  <h1>lanmgr <span id="ver"></span></h1>
+  <h1>lanlord <span id="ver"></span></h1>
   <div class="hd">
     <button id="btn-rescan">重新扫描</button>
     <span id="status" class="badge"></span>
+    <button id="btn-settings">⚙ 设置</button>
   </div>
 </header>
 
 <main>
-  <section class="panel">
-    <h2>局域网拓扑 <span id="gw" class="dim"></span></h2>
+  <section class="panel wide">
+    <h2>网络拓扑 <span class="dim">（光猫为根 · 自上而下 · 点击设备查看 Docker 容器）</span></h2>
     <div id="tree" class="tree"></div>
-  </section>
-
-  <section class="panel">
-    <h2>Agent 提供方 <span class="dim">（CC Switch 风格：调用/请求地址/模型/Key 本地配置）</span></h2>
-    <div id="prov-list"></div>
-    <div class="row">
-      <input id="prov-name" placeholder="名称(如 deepseek)">
-      <input id="prov-base" placeholder="调用地址 base_url(如 https://api.deepseek.com)">
-    </div>
-    <div class="row">
-      <input id="prov-endpoint" placeholder="请求地址 endpoint(如 /v1/chat/completions)">
-      <input id="prov-model" placeholder="模型(如 deepseek-chat)">
-      <button id="btn-prov">保存提供方</button>
-    </div>
-    <div class="row">
-      <input id="prov-key-name" placeholder="设置 Key 的提供方名">
-      <input id="prov-key" type="password" placeholder="API Key">
-      <button id="btn-prov-key">设置 API Key(加密)</button>
-    </div>
   </section>
 
   <section class="panel">
@@ -61,9 +43,35 @@
     </div>
     <pre id="exec-out" class="out"></pre>
   </section>
+</main>
 
-  <section class="panel">
-    <h2>凭据管理 <span class="dim">（用户名与密码均 DPAPI 加密存储）</span></h2>
+<!-- 设置（Agent 提供方 + 凭证管理） -->
+<div id="drawer-backdrop" class="backdrop hidden"></div>
+<div id="settings-drawer" class="drawer">
+  <div class="drawer-box">
+    <div class="modal-head"><h2>⚙ 设置</h2><button id="btn-settings-close" class="close">×</button></div>
+
+    <h3>Agent 提供方 <span class="dim">（选供应商自动填地址，一键拉取模型）</span></h3>
+    <div class="row">
+      <select id="prov-vendor"><option value="">— 选择供应商（预设）—</option></select>
+    </div>
+    <div class="row">
+      <input id="prov-name" placeholder="名称（选供应商后自动填，也可自定义）">
+      <input id="prov-base" placeholder="调用地址 base_url">
+      <input id="prov-endpoint" placeholder="请求地址 endpoint">
+    </div>
+    <div class="row">
+      <input id="prov-key" type="password" placeholder="API Key（填完后可一键获取模型）">
+      <button id="btn-prov">保存（自动填充配置）</button>
+    </div>
+    <div class="row">
+      <input id="prov-model" placeholder="模型" list="model-list">
+      <datalist id="model-list"></datalist>
+      <button id="btn-prov-models">一键获取模型</button>
+    </div>
+    <div id="prov-list"></div>
+
+    <h3>凭证管理 <span class="dim">（用户名与密码均 DPAPI 加密存储）</span></h3>
     <div class="row">
       <input id="cred-label" placeholder="标签">
       <input id="cred-target" placeholder="目标 host/URI">
@@ -75,9 +83,28 @@
       <button id="btn-cred">保存</button>
     </div>
     <ul id="cred-list" class="credlist"></ul>
-  </section>
-</main>
+  </div>
+</div>
 
+<!-- 设备 Docker 凭据弹窗 -->
+<div id="docker-modal" class="modal hidden">
+  <div class="modal-box">
+    <h2>🐳 查看 Docker 容器</h2>
+    <p id="docker-ip" class="dim"></p>
+    <div class="row">
+      <input id="docker-user" placeholder="SSH 用户名">
+    </div>
+    <div class="row">
+      <input id="docker-pass" type="password" placeholder="SSH 密码">
+    </div>
+    <div class="modal-actions">
+      <button id="btn-docker-cancel">取消</button>
+      <button id="btn-docker-ok" class="primary">查看容器</button>
+    </div>
+  </div>
+</div>
+
+<!-- 风险操作确认弹窗 -->
 <div id="modal" class="modal hidden">
   <div class="modal-box">
     <h2>⚠ 风险操作确认</h2>

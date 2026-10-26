@@ -33,6 +33,7 @@ void config_defaults(Config *c) {
     c->scan_timeout_ms = 400;
     c->confirm_timeout_s = 120;
     c->store_plaintext = false;
+    c->trace_upstream = true;
     c->agent.enabled = false;
     c->agent.base_url[0] = 0;
     c->agent.model[0] = 0;
@@ -71,6 +72,7 @@ int config_load(Config *c, const char *path) {
     c->scan_timeout_ms = jint(root, "scan_timeout_ms", c->scan_timeout_ms);
     c->confirm_timeout_s = jint(root, "confirm_timeout_s", c->confirm_timeout_s);
     c->store_plaintext = jbool(root, "store_plaintext", c->store_plaintext);
+    c->trace_upstream = jbool(root, "trace_upstream", c->trace_upstream);
 
     const cJSON *ag = cJSON_GetObjectItemCaseSensitive(root, "agent");
     if (cJSON_IsObject(ag)) {
@@ -103,6 +105,7 @@ int config_save(const Config *c, const char *path) {
     cJSON_AddNumberToObject(root, "scan_timeout_ms", c->scan_timeout_ms);
     cJSON_AddNumberToObject(root, "confirm_timeout_s", c->confirm_timeout_s);
     cJSON_AddBoolToObject(root, "store_plaintext", c->store_plaintext ? 1 : 0);
+    cJSON_AddBoolToObject(root, "trace_upstream", c->trace_upstream ? 1 : 0);
 
     cJSON *ag = cJSON_CreateObject();
     cJSON_AddBoolToObject(ag, "enabled", c->agent.enabled ? 1 : 0);

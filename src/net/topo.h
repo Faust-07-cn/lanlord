@@ -3,8 +3,8 @@
 
 #include <stdint.h>
 
-/* Run the full discovery pipeline (interfaces->gateway, ARP, ping sweep) and return a
- * malloc'd JSON string describing the LAN as a tree. Caller must free(). */
-char *net_discover(int sweep_timeout_ms, int max_hosts);
+/* Run the full discovery pipeline (interfaces->gateway, ARP, ping sweep, optional
+ * upstream traceroute) and return a malloc'd JSON tree. Caller must free(). */
+char *net_discover(int sweep_timeout_ms, int max_hosts, int trace_upstream);
 
 #endif

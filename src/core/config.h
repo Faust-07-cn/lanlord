@@ -9,6 +9,7 @@ typedef struct {
     int    scan_timeout_ms;    /* per-ping timeout */
     int    confirm_timeout_s;  /* risk-confirmation auto-deny timeout */
     bool   store_plaintext;    /* DEFAULT FALSE; explicit opt-in only */
+    bool   trace_upstream;     /* traceroute to discover upstream routers */
 
     struct {
         bool   enabled;

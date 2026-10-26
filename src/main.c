@@ -13,6 +13,7 @@
 #include "agent/agent.h"
 #include "agent/tools.h"
 #include "agent/provider.h"
+#include "agent/vendors.h"
 #include "sec/keystore.h"
 #include "web/server.h"
 #include "svc/service.h"
@@ -23,7 +24,7 @@
 #define LANMGR_VERSION "0.1.0"
 
 static void usage(const char *prog) {
-    printf("lanmgr %s - Windows 局域网管理系统\n\n", LANMGR_VERSION);
+    printf("lanlord %s - Windows 局域网管理系统\n\n", LANMGR_VERSION);
     printf("用法: %s <命令> [参数]\n\n命令:\n", prog);
     printf("  --help             显示本帮助\n");
     printf("  --version          显示版本号\n");
@@ -76,9 +77,9 @@ int main(int argc, char **argv) {
 
     const char *cmd = argv[1];
     if (!strcmp(cmd, "--help") || !strcmp(cmd, "-h")) { usage(argv[0]); return 0; }
-    if (!strcmp(cmd, "--version") || !strcmp(cmd, "-v")) { printf("lanmgr %s\n", LANMGR_VERSION); return 0; }
+    if (!strcmp(cmd, "--version") || !strcmp(cmd, "-v")) { printf("lanlord %s\n", LANMGR_VERSION); return 0; }
 
-    LOGI("lanmgr %s cmd=%s", LANMGR_VERSION, cmd);
+    LOGI("lanlord %s cmd=%s", LANMGR_VERSION, cmd);
 
     if (!strcmp(cmd, "--demo") || !strcmp(cmd, "--serve")) {
         Vault v; vault_init(&v, cfg.vault_path, cfg.store_plaintext);
@@ -99,7 +100,7 @@ int main(int argc, char **argv) {
     if (!strcmp(cmd, "--service-uninstall")) return svc_uninstall();
 
     if (!strcmp(cmd, "--discover")) {
-        char *json = net_discover(cfg.scan_timeout_ms, cfg.scan_max_hosts);
+        char *json = net_discover(cfg.scan_timeout_ms, cfg.scan_max_hosts, cfg.trace_upstream);
         if (!json) { LOGE("discover 失败"); return E_INTERNAL; }
         printf("%s\n", json);
         free(json);
@@ -261,6 +262,43 @@ int main(int argc, char **argv) {
             printf("已删除提供方「%s」\n", argv[2]);
             return 0;
         }
+    }
+
+    if (!strcmp(cmd, "--vendor-ls")) {
+        for (int i = 0; i < vendors_count(); i++) {
+            const VendorPreset *v = vendors_at(i);
+            printf("%-12s %-24s %s%s\n", v->name, v->label, v->base_url, v->endpoint);
+        }
+        return 0;
+    }
+
+    if (!strcmp(cmd, "--provider-models")) {
+        if (argc < 3) { fprintf(stderr, "用法: --provider-models <提供方名>\n"); return E_ARG; }
+        const VendorPreset *vp = vendors_find(argv[2]);
+        ProviderList pl;
+        provider_list_load(cfg.providers_path, &pl);
+        AgentProvider *p = provider_find(&pl, argv[2]);
+        const char *base = p ? p->base_url : (vp ? vp->base_url : NULL);
+        char models_url[600]; models_url[0] = 0;
+        if (vp && vp->models_url[0]) snprintf(models_url, sizeof(models_url), "%s", vp->models_url);
+        else if (base && base[0]) {
+            size_t blen = strlen(base);
+            snprintf(models_url, sizeof(models_url), "%s%smodels", base, (blen > 0 && base[blen - 1] == '/') ? "" : "/");
+        } else { fprintf(stderr, "无法确定模型列表地址（先 --provider-add 或选择已知供应商）\n"); return E_ARG; }
+
+        char key[512];
+        if (keystore_get(cfg.apikeys_path, argv[2], key, sizeof(key)) != E_OK || !key[0]) {
+            fprintf(stderr, "提供方「%s」尚未设置 API Key\n", argv[2]);
+            return E_AUTH;
+        }
+        log_redact(key);
+        printf("模型列表地址: %s\n", models_url);
+        char *arr = vendor_models_fetch(models_url, key, cfg.agent.timeout_s);
+        zeroize(key, sizeof(key));
+        if (!arr) { fprintf(stderr, "获取模型失败（检查 Key / 地址 / 网络）\n"); return E_NET; }
+        printf("%s\n", arr);
+        free(arr);
+        return 0;
     }
 
     if (!strcmp(cmd, "--tool-test")) {

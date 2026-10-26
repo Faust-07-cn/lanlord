@@ -4,6 +4,8 @@
 #include "neighbor.h"
 #include "probe.h"
 #include "name.h"
+#include "traceroute.h"
+#include "gateway.h"
 #include "util.h"
 #include "error.h"
 #include "log.h"
@@ -12,7 +14,7 @@
 #include <string.h>
 #include <stdio.h>
 
-typedef enum { NODE_ROOT = 0, NODE_SUBNET = 1, NODE_GATEWAY = 2, NODE_SWITCH = 3, NODE_AP = 4, NODE_HOST = 5, NODE_UNKNOWN = 6 } NodeType;
+typedef enum { NODE_ROOT = 0, NODE_SUBNET = 1, NODE_GATEWAY = 2, NODE_SWITCH = 3, NODE_AP = 4, NODE_HOST = 5, NODE_UNKNOWN = 6, NODE_UPSTREAM = 7 } NodeType;
 
 typedef struct DeviceNode {
     char     id[40];
@@ -37,6 +39,7 @@ static const char *type_str(NodeType t) {
         case NODE_SWITCH: return "switch";
         case NODE_AP: return "ap";
         case NODE_HOST: return "host";
+        case NODE_UPSTREAM: return "upstream";
         default: return "unknown";
     }
 }
@@ -98,102 +101,158 @@ static void push_seen(uint32_t *seen, int *n, int cap, uint32_t ip) {
     seen[(*n)++] = ip;
 }
 
-static DeviceNode *build_tree(const NetInfo *ni, const NeighborTable *nt, const AliveList *al) {
+static const char *router_friendly(const char *vendor) {
+    if (!strcmp(vendor, "Xiaomi")) return "小米";
+    if (!strcmp(vendor, "Huawei")) return "华为";
+    if (!strcmp(vendor, "H3C")) return "H3C";
+    if (!strcmp(vendor, "TP-Link")) return "TP-Link";
+    if (!strcmp(vendor, "Tenda")) return "腾达";
+    if (!strcmp(vendor, "NETGEAR")) return "NETGEAR";
+    if (!strcmp(vendor, "Cisco")) return "Cisco";
+    if (!strcmp(vendor, "Ubiquiti")) return "Ubiquiti";
+    if (!strcmp(vendor, "MikroTik")) return "MikroTik";
+    if (!strcmp(vendor, "D-Link")) return "D-Link";
+    if (!strcmp(vendor, "ASUS")) return "ASUS";
+    return vendor;
+}
+
+/* Build the local LAN subtree: returns the GATEWAY node (top of the LAN), with the active
+ * hosts attached directly beneath it. Uses the primary subnet (default-gateway one first). */
+static DeviceNode *build_lan_subtree(const NetInfo *ni, const NeighborTable *nt, const AliveList *al) {
+    char ipbuf[16];
+    int pi = -1;
+
+    if (ni->has_default) {
+        for (int i = 0; i < ni->subnet_count; i++)
+            if (ni->subnets[i].has_gateway && ni->subnets[i].gateway == ni->default_gateway) { pi = i; break; }
+    }
+    if (pi < 0)
+        for (int i = 0; i < ni->subnet_count; i++)
+            if (is_private_ip(ni->subnets[i].ip) && ni->subnets[i].has_gateway) { pi = i; break; }
+    if (pi < 0)
+        for (int i = 0; i < ni->subnet_count; i++)
+            if (is_private_ip(ni->subnets[i].ip)) { pi = i; break; }
+    if (pi < 0) return NULL;
+
+    const Subnet *s = &ni->subnets[pi];
+    uint32_t gw_ip = s->has_gateway ? s->gateway : s->ip;
+
+    DeviceNode *gw = node_new(NODE_GATEWAY);
+    snprintf(gw->id, sizeof(gw->id), "gw");
+    ip_to_string(gw_ip, ipbuf, sizeof(ipbuf));
+    uint8_t m[6] = {0}; int t = 0;
+    if (s->has_gateway && neighbor_find(nt, gw_ip, m, &t) && !bad_mac(m)) set_oui(gw, m);
+    gw->type = NODE_GATEWAY;
+    if (gw->vendor[0] && strcmp(gw->vendor, "unknown") != 0)
+        snprintf(gw->label, sizeof(gw->label), "网关 %s · %s（%s）", ipbuf,
+                 s->ifname[0] ? s->ifname : "接口", router_friendly(gw->vendor));
+    else
+        snprintf(gw->label, sizeof(gw->label), "网关 %s · %s", ipbuf, s->ifname[0] ? s->ifname : "接口");
+    gw->ip = gw_ip;
+    gw->prefix = s->prefix;
+    gw->active = true;
+
+    uint32_t seen[LANMGR_MAX_ALIVE];
+    int nseen = 0;
+    uint32_t base = network_address(s->ip, s->prefix);
+    uint32_t hostmask = (s->prefix == 0) ? 0xFFFFFFFFu : (0xFFFFFFFFu >> s->prefix);
+    uint32_t bcast = base | htonl(hostmask);
+
+    for (int k = 0; k < nt->count; k++) {
+        const NeighborEntry *e = &nt->entries[k];
+        if (e->ifindex != s->ifindex) continue;
+        uint32_t ip = e->ip;
+        if (bad_ip(ip) || bad_mac(e->mac)) continue;
+        if (ip == base || ip == bcast) continue;
+        if (is_self(ni, ip)) continue;
+        if (ip == gw_ip) continue;
+        if (e->type == 2) continue;
+        push_seen(seen, &nseen, LANMGR_MAX_ALIVE, ip);
+    }
+    for (int k = 0; k < al->count; k++) {
+        uint32_t ip = al->ips[k];
+        if (!in_subnet(ip, s->ip, s->prefix)) continue;
+        if (bad_ip(ip)) continue;
+        if (ip == base || ip == bcast) continue;
+        if (is_self(ni, ip)) continue;
+        if (ip == gw_ip) continue;
+        push_seen(seen, &nseen, LANMGR_MAX_ALIVE, ip);
+    }
+    for (int k = 0; k < nseen; k++) {
+        uint32_t ip = seen[k];
+        DeviceNode *h = node_new(NODE_HOST);
+        ip_to_string(ip, ipbuf, sizeof(ipbuf));
+        snprintf(h->id, sizeof(h->id), "host-%s", ipbuf);
+        uint8_t mac[6]; int tt = 0;
+        bool have = neighbor_find(nt, ip, mac, &tt);
+        if (have && !bad_mac(mac)) set_oui(h, mac);
+        else { snprintf(h->vendor, sizeof(h->vendor), "unknown"); h->type = NODE_HOST; }
+        snprintf(h->label, sizeof(h->label), "%s", ipbuf);
+        if (h->vendor[0] && strcmp(h->vendor, "unknown") != 0)
+            snprintf(h->label, sizeof(h->label), "%s · %s", ipbuf, h->vendor);
+        h->ip = ip;
+        h->active = true;
+        add_child(gw, h);
+    }
+    return gw;
+}
+
+/* Trace upward from the local host to discover the wired router cascade (multi-level NAT).
+ * Traceroute to several targets and keep the deepest path so a single short/obscured path
+ * cannot hide routers; each level is tagged 内网/公网 + level number. */
+static int cmp_hop_dist(const void *a, const void *b) {
+    const GwHop *x = (const GwHop *)a, *y = (const GwHop *)b;
+    return x->distance - y->distance;
+}
+
+/* Assemble the full topology with the 光猫 (ONT) as the ROOT, organized top-down:
+ *   光猫 -> 华为/上游路由 -> 本地网关 -> 活动主机 */
+static DeviceNode *assemble_tree(const NetInfo *ni, const NeighborTable *nt, const AliveList *al, int trace_upstream) {
+    DeviceNode *lan = build_lan_subtree(ni, nt, al);
+
+    if (trace_upstream) {
+        GwHop up[32];
+        int n = gateway_scan(ni->self_ip, ni->default_gateway, 400, up, 32);
+        int m = 0;
+        for (int i = 0; i < n; i++) if (up[i].distance <= 3) up[m++] = up[i];
+        n = m;
+        if (n > 0) {
+            qsort(up, (size_t)n, sizeof(up[0]), cmp_hop_dist);
+            DeviceNode *nodes[32];
+            char ipbuf[16];
+            for (int i = 0; i < n; i++) {
+                ip_to_string(up[i].ip, ipbuf, sizeof(ipbuf));
+                char brand[64] = "";
+                gateway_brand(up[i].ip, brand, sizeof(brand));
+
+                DeviceNode *nd = node_new(NODE_UPSTREAM);
+                snprintf(nd->id, sizeof(nd->id), "upstream-%d", i);
+                bool is_ont = strstr(brand, "光猫") != NULL;
+                bool farthest = (i == n - 1);
+                if (is_ont || farthest) {
+                    if (is_ont) snprintf(nd->label, sizeof(nd->label), "光猫 %s（%s）", ipbuf, brand);
+                    else snprintf(nd->label, sizeof(nd->label), "光猫 %s（上级边界）", ipbuf);
+                } else {
+                    if (brand[0]) snprintf(nd->label, sizeof(nd->label), "上游路由 %s（%s）", ipbuf, brand);
+                    else snprintf(nd->label, sizeof(nd->label), "上游路由 %s", ipbuf);
+                }
+                nd->ip = up[i].ip;
+                nd->active = true;
+                nodes[i] = nd;
+            }
+            /* farthest = 光猫 = root; chain downward to the nearest router, then LAN subtree */
+            DeviceNode *root = nodes[n - 1];
+            for (int i = n - 1; i > 0; i--) add_child(nodes[i], nodes[i - 1]);
+            if (lan) add_child(nodes[0], lan);
+            return root;
+        }
+    }
+
     DeviceNode *root = node_new(NODE_ROOT);
     snprintf(root->id, sizeof(root->id), "root");
     snprintf(root->label, sizeof(root->label), "局域网");
     root->active = true;
-
-    char ipbuf[16];
-
-    for (int si = 0; si < ni->subnet_count; si++) {
-        const Subnet *s = &ni->subnets[si];
-
-        /* Ignore segments outside the LAN (proxy/fake-IP, public direct, APIPA...). */
-        if (!is_private_ip(s->ip)) {
-            LOGI("忽略非局域网网段 %s (ifname=%s)",
-                 ip_to_string(s->ip, (char[16]){0}, 16), s->ifname);
-            continue;
-        }
-
-        DeviceNode *sub = node_new(NODE_SUBNET);
-        snprintf(sub->id, sizeof(sub->id), "subnet-%d", si);
-        snprintf(ipbuf, sizeof(ipbuf), "%s", ip_to_string(network_address(s->ip, s->prefix), (char[16]){0}, 16));
-        snprintf(sub->label, sizeof(sub->label), "%s/%d · %s", ipbuf, s->prefix,
-                 s->ifname[0] ? s->ifname : "接口");
-        sub->ip = network_address(s->ip, s->prefix);
-        sub->prefix = s->prefix;
-        sub->active = true;
-        snprintf(sub->ifname, sizeof(sub->ifname), "%s", s->ifname);
-
-        /* Gateway / upstream router node. */
-        if (s->has_gateway && !bad_ip(s->gateway)) {
-            DeviceNode *gw = node_new(NODE_GATEWAY);
-            snprintf(gw->id, sizeof(gw->id), "gw-%d", si);
-            snprintf(ipbuf, sizeof(ipbuf), "%s", ip_to_string(s->gateway, (char[16]){0}, 16));
-            uint8_t m[6] = {0}; int t = 0;
-            if (neighbor_find(nt, s->gateway, m, &t) && !bad_mac(m)) {
-                set_oui(gw, m);
-            }
-            gw->type = NODE_GATEWAY;
-            snprintf(gw->label, sizeof(gw->label), "%s（上级路由）", ipbuf);
-            if (gw->vendor[0] && strcmp(gw->vendor, "unknown") != 0)
-                snprintf(gw->label, sizeof(gw->label), "%s（上级路由 · %s）", ipbuf, gw->vendor);
-            gw->ip = s->gateway;
-            gw->active = true;
-            add_child(sub, gw);
-        }
-
-        /* Hosts: ARP rows scoped to this interface (already "in use") + live ping results. */
-        uint32_t seen[LANMGR_MAX_ALIVE];
-        int nseen = 0;
-
-        uint32_t base = network_address(s->ip, s->prefix);
-        uint32_t hostmask = (s->prefix == 0) ? 0xFFFFFFFFu : (0xFFFFFFFFu >> s->prefix);
-        uint32_t bcast = base | htonl(hostmask);
-
-        for (int k = 0; k < nt->count; k++) {
-            const NeighborEntry *e = &nt->entries[k];
-            if (e->ifindex != s->ifindex) continue;               /* scope to this interface */
-            uint32_t ip = e->ip;
-            if (bad_ip(ip) || bad_mac(e->mac)) continue;
-            if (ip == base || ip == bcast) continue;
-            if (is_self(ni, ip)) continue;
-            if (ip == s->gateway) continue;                        /* already a gateway node */
-            if (e->type == 2) continue;                            /* invalid ARP row */
-            push_seen(seen, &nseen, LANMGR_MAX_ALIVE, ip);
-        }
-        for (int k = 0; k < al->count; k++) {
-            uint32_t ip = al->ips[k];
-            if (!in_subnet(ip, s->ip, s->prefix)) continue;
-            if (bad_ip(ip)) continue;
-            if (ip == base || ip == bcast) continue;
-            if (is_self(ni, ip)) continue;
-            if (ip == s->gateway) continue;
-            push_seen(seen, &nseen, LANMGR_MAX_ALIVE, ip);
-        }
-
-        for (int k = 0; k < nseen; k++) {
-            uint32_t ip = seen[k];
-            DeviceNode *h = node_new(NODE_HOST);
-            snprintf(ipbuf, sizeof(ipbuf), "%s", ip_to_string(ip, (char[16]){0}, 16));
-            snprintf(h->id, sizeof(h->id), "host-%s", ipbuf);
-            uint8_t mac[6]; int t = 0;
-            bool have = neighbor_find(nt, ip, mac, &t);
-            if (have && !bad_mac(mac)) set_oui(h, mac);
-            else { snprintf(h->vendor, sizeof(h->vendor), "unknown"); h->type = NODE_HOST; }
-            snprintf(h->label, sizeof(h->label), "%s", ipbuf);
-            if (h->vendor[0] && strcmp(h->vendor, "unknown") != 0)
-                snprintf(h->label, sizeof(h->label), "%s · %s", ipbuf, h->vendor);
-            h->ip = ip;
-            h->active = true;
-            add_child(sub, h);
-        }
-
-        if (sub->children) add_child(root, sub);
-        else free(sub);
-    }
-
+    if (lan) add_child(root, lan);
     return root;
 }
 
@@ -224,7 +283,7 @@ static void node_free(DeviceNode *n) {
     free(n);
 }
 
-char *net_discover(int sweep_timeout_ms, int max_hosts) {
+char *net_discover(int sweep_timeout_ms, int max_hosts, int trace_upstream) {
     if (sweep_timeout_ms <= 0) sweep_timeout_ms = 400;
     if (max_hosts <= 0) max_hosts = 256;
 
@@ -246,7 +305,7 @@ char *net_discover(int sweep_timeout_ms, int max_hosts) {
             push_seen(al.ips, &al.count, LANMGR_MAX_ALIVE, tmp.ips[k]);
     }
 
-    DeviceNode *root = build_tree(&ni, &nt, &al);
+    DeviceNode *root = assemble_tree(&ni, &nt, &al, trace_upstream);
     cJSON *j = serialize_node(root);
     char *s = cJSON_PrintUnformatted(j);
     cJSON_Delete(j);

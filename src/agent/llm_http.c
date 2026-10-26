@@ -136,3 +136,50 @@ done:
     free(body);
     return result;
 }
+
+char *llm_http_get(const char *full_url, const char *api_key, int timeout_s) {
+    if (!full_url) return NULL;
+    if (timeout_s <= 0) timeout_s = 60;
+
+    BOOL https = FALSE;
+    char host[256];
+    INTERNET_PORT port = 0;
+    char path[512];
+    if (parse_url(full_url, &https, host, sizeof(host), &port, path, sizeof(path)) != E_OK)
+        return NULL;
+
+    char *result = NULL;
+    HINTERNET hSession = NULL, hConnect = NULL, hRequest = NULL;
+    WCHAR *whost = NULL, *wpath = NULL, *wheaders = NULL;
+
+    hSession = WinHttpOpen(L"lanmgr/0.1", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0);
+    if (!hSession) goto done;
+    WinHttpSetTimeouts(hSession, 10000, 10000, 30000, (int)timeout_s * 1000);
+    whost = w_from_utf8(host);
+    wpath = w_from_utf8(path);
+    if (!whost || !wpath) goto done;
+    hConnect = WinHttpConnect(hSession, whost, port, 0);
+    if (!hConnect) goto done;
+    DWORD flags = https ? WINHTTP_FLAG_SECURE : 0;
+    hRequest = WinHttpOpenRequest(hConnect, L"GET", wpath, NULL, NULL, NULL, flags);
+    if (!hRequest) goto done;
+
+    char hdr[600];
+    snprintf(hdr, sizeof(hdr), "Authorization: Bearer %s", api_key ? api_key : "");
+    wheaders = w_from_utf8(hdr);
+    if (!wheaders) goto done;
+    WinHttpAddRequestHeaders(hRequest, wheaders, (DWORD)-1L, WINHTTP_ADDREQ_FLAG_ADD);
+
+    if (!WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, NULL, 0, 0, 0)) goto done;
+    if (!WinHttpReceiveResponse(hRequest, NULL)) goto done;
+    result = winhttp_read_all(hRequest);
+
+done:
+    if (wheaders) free(wheaders);
+    if (wpath) free(wpath);
+    if (whost) free(whost);
+    if (hRequest) WinHttpCloseHandle(hRequest);
+    if (hConnect) WinHttpCloseHandle(hConnect);
+    if (hSession) WinHttpCloseHandle(hSession);
+    return result;
+}

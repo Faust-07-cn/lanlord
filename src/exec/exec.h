@@ -18,7 +18,14 @@ int exec_local_run(const char *command, const ExecOpts *opts, char *out, size_t 
 int exec_remote_run(Vault *v, const char *ip, const char *cred_id, const char *command,
                     const ExecOpts *opts, char *out, size_t outlen);
 
+/* Run a remote command with an inline username/password (NOT persisted to the vault). */
+int exec_remote_run_direct(const char *ip, const char *username, const char *password,
+                           const char *command, const ExecOpts *opts, char *out, size_t outlen);
+
 /* Locate the system OpenSSH ssh.exe; returns true if present. */
 bool ssh_available(void);
+
+/* Run a command line via cmd and capture combined stdout+stderr into out. */
+int exec_capture_cmd(const char *cmdline, char *out, size_t outlen, int timeout_ms);
 
 #endif

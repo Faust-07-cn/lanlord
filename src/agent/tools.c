@@ -4,6 +4,7 @@
 #include "error.h"
 #include "log.h"
 #include "exec/exec.h"
+#include "exec/docker.h"
 #include "net/topo.h"
 #include <iphlpapi.h>
 #include <icmpapi.h>
@@ -39,7 +40,7 @@ static bool ping_host(uint32_t ip, int timeout_ms) {
 
 static int t_topology(const cJSON *a, ToolContext *ctx, char *out, size_t n) {
     (void)a;
-    char *j = net_discover(ctx->cfg->scan_timeout_ms, ctx->cfg->scan_max_hosts);
+    char *j = net_discover(ctx->cfg->scan_timeout_ms, ctx->cfg->scan_max_hosts, ctx->cfg->trace_upstream);
     if (!j) { snprintf(out, n, "{\"error\":\"discover failed\"}"); return E_INTERNAL; }
     snprintf(out, n, "%s", j);
     free(j);
@@ -99,6 +100,17 @@ static int t_exec_remote(const cJSON *a, ToolContext *ctx, char *out, size_t n) 
     cJSON_Delete(r);
     snprintf(out, n, "%s", s);
     free(s);
+    return 0;
+}
+
+static int t_docker(const cJSON *a, ToolContext *ctx, char *out, size_t n) {
+    const char *ip = jstr(a, "ip");
+    const char *cred = jstr(a, "cred_id");
+    if (!ip || !cred) { snprintf(out, n, "{\"error\":\"ip/cred_id required\"}"); return E_ARG; }
+    char buf[16384];
+    int rc = docker_list_remote(ctx->vault, ip, cred, buf, sizeof(buf));
+    if (rc != E_OK) { snprintf(out, n, "{\"error\":\"docker list failed rc=%d\"}", rc); return rc; }
+    snprintf(out, n, "%s", buf);
     return 0;
 }
 
@@ -180,6 +192,10 @@ static const ToolDef REGISTRY[] = {
          "在局域网内某台设备上执行命令。Linux 设备走 SSH；escalate=true 时用 sudo 提权。",
          "{\"type\":\"object\",\"properties\":{\"ip\":{\"type\":\"string\"},\"cred_id\":{\"type\":\"string\"},\"command\":{\"type\":\"string\"},\"escalate\":{\"type\":\"boolean\"}},\"required\":[\"ip\",\"cred_id\",\"command\"]}",
          RISK_WRITE, exec_remote_risk, t_exec_remote),
+    TOOL("docker.ps",
+         "列出局域网内某台设备上的 Docker 容器（经 SSH 执行 docker ps）。",
+         "{\"type\":\"object\",\"properties\":{\"ip\":{\"type\":\"string\"},\"cred_id\":{\"type\":\"string\"}},\"required\":[\"ip\",\"cred_id\"]}",
+         RISK_READ, t_docker),
     TOOL("credential.list",
          "列出已保存的凭据（仅标签与目标，不含密码）。",
          "{\"type\":\"object\",\"properties\":{}}",

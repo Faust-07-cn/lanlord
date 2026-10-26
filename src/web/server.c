@@ -8,9 +8,11 @@
 #include "sec/risk.h"
 #include "sec/audit.h"
 #include "exec/exec.h"
+#include "exec/docker.h"
 #include "agent/agent.h"
 #include "agent/tools.h"
 #include "agent/provider.h"
+#include "agent/vendors.h"
 #include "sec/keystore.h"
 #include "cJSON.h"
 #include <stdlib.h>
@@ -104,7 +106,7 @@ static void agent_job_cleanup(void *ctx) { free(ctx); }
 
 static int discover_job_run(Job *j, char *out, size_t n) {
     (void)j;
-    char *json = net_discover(g_cfg->scan_timeout_ms, g_cfg->scan_max_hosts);
+    char *json = net_discover(g_cfg->scan_timeout_ms, g_cfg->scan_max_hosts, g_cfg->trace_upstream);
     if (!json) return E_INTERNAL;
     snprintf(out, n, "%s", json);
     EnterCriticalSection(&g_topo_lock);
@@ -396,6 +398,106 @@ static void api_provider_key(SOCKET s, cJSON *body) {
     cJSON_Delete(o);
 }
 
+static void api_vendors_get(SOCKET s) {
+    cJSON *arr = cJSON_CreateArray();
+    for (int i = 0; i < vendors_count(); i++) {
+        const VendorPreset *v = vendors_at(i);
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddStringToObject(o, "name", v->name);
+        cJSON_AddStringToObject(o, "label", v->label);
+        cJSON_AddStringToObject(o, "base_url", v->base_url);
+        cJSON_AddStringToObject(o, "endpoint", v->endpoint);
+        cJSON_AddStringToObject(o, "default_model", v->default_model);
+        cJSON_AddItemToArray(arr, o);
+    }
+    send_json(s, arr);
+    cJSON_Delete(arr);
+}
+
+static void api_provider_models(SOCKET s, cJSON *body) {
+    const char *name = ""; const char *base = ""; const char *key = "";
+    cJSON *tmp;
+    if ((tmp = cJSON_GetObjectItemCaseSensitive(body, "name")) && cJSON_IsString(tmp)) name = tmp->valuestring;
+    if ((tmp = cJSON_GetObjectItemCaseSensitive(body, "base_url")) && cJSON_IsString(tmp)) base = tmp->valuestring;
+    if ((tmp = cJSON_GetObjectItemCaseSensitive(body, "api_key")) && cJSON_IsString(tmp)) key = tmp->valuestring;
+    if (!key[0]) { send_err(s, 400, "api_key required"); return; }
+    log_redact(key);
+
+    const char *models_url = NULL;
+    char derived[600];
+    const VendorPreset *vp = name[0] ? vendors_find(name) : NULL;
+    if (vp && vp->models_url[0]) models_url = vp->models_url;
+    else if (base[0]) {
+        size_t blen = strlen(base);
+        snprintf(derived, sizeof(derived), "%s%smodels", base, (blen > 0 && base[blen - 1] == '/') ? "" : "/");
+        models_url = derived;
+    }
+    if (!models_url) { send_err(s, 400, "无法确定模型列表地址（请选择供应商或填写 base_url）"); return; }
+
+    char *arr = vendor_models_fetch(models_url, key, g_cfg->agent.timeout_s);
+    if (!arr) { send_err(s, 502, "获取模型失败（检查 API Key 与地址）"); return; }
+    send_json_str(s, arr);
+    free(arr);
+}
+
+static void api_device_docker(SOCKET s, cJSON *body) {
+    const char *ip = ""; const char *cred = ""; const char *user = ""; const char *pass = "";
+    cJSON *tmp;
+    if ((tmp = cJSON_GetObjectItemCaseSensitive(body, "ip")) && cJSON_IsString(tmp)) ip = tmp->valuestring;
+    if ((tmp = cJSON_GetObjectItemCaseSensitive(body, "cred_id")) && cJSON_IsString(tmp)) cred = tmp->valuestring;
+    if ((tmp = cJSON_GetObjectItemCaseSensitive(body, "username")) && cJSON_IsString(tmp)) user = tmp->valuestring;
+    if ((tmp = cJSON_GetObjectItemCaseSensitive(body, "password")) && cJSON_IsString(tmp)) pass = tmp->valuestring;
+    if (!ip[0]) { send_err(s, 400, "ip required"); return; }
+    if (pass[0]) log_redact(pass);
+
+    char out[16384];
+    int rc;
+    if (user[0] || pass[0]) {
+        if (!user[0] || !pass[0]) { send_err(s, 400, "username 与 password 需同时提供"); return; }
+        rc = docker_list_remote_direct(ip, user, pass, out, sizeof(out));
+        if (rc == E_OK) {
+            /* 持久化层：把本次成功使用的 SSH 凭据按目标 IP 写入 DPAPI 加密的 vault，
+               下次同一设备无需再次输入密码（绝不落明文，见 vault.c）。 */
+            CredPlain lst[64];
+            int n = vault_list(g_vault, lst, 64);
+            CredPlain c; memset(&c, 0, sizeof(c));
+            bool exists = false;
+            for (int i = 0; i < n; i++) {
+                if (strcmp(lst[i].target, ip) == 0 && lst[i].type == CRED_SSH) {
+                    snprintf(c.id, sizeof(c.id), "%s", lst[i].id);
+                    snprintf(c.label, sizeof(c.label), "%s", lst[i].label);
+                    exists = true;
+                    break;
+                }
+            }
+            if (!exists) snprintf(c.label, sizeof(c.label), "设备 %s", ip);
+            c.type = CRED_SSH;
+            snprintf(c.target, sizeof(c.target), "%s", ip);
+            snprintf(c.username, sizeof(c.username), "%s", user);
+            snprintf(c.secret, sizeof(c.secret), "%s", pass);
+            vault_store(g_vault, &c);
+            cred_zeroize(&c);
+        }
+    } else if (cred[0]) {
+        rc = docker_list_remote(g_vault, ip, cred, out, sizeof(out));
+    } else {
+        /* 未显式提供凭据：从持久化层按目标 IP 查找已保存的 SSH 凭据 */
+        CredPlain lst[64];
+        int n = vault_list(g_vault, lst, 64);
+        char found[40] = "";
+        for (int i = 0; i < n; i++) {
+            if (strcmp(lst[i].target, ip) == 0 && lst[i].type == CRED_SSH) {
+                snprintf(found, sizeof(found), "%s", lst[i].id);
+                break;
+            }
+        }
+        if (!found[0]) { send_err(s, 400, "该设备尚无已保存的凭据，请首次输入用户名/密码"); return; }
+        rc = docker_list_remote(g_vault, ip, found, out, sizeof(out));
+    }
+    if (rc != E_OK) { send_err(s, 502, out[0] ? out : "无法获取容器"); return; }
+    send_json_str(s, out);
+}
+
 static void api_provider_delete(SOCKET s, cJSON *body) {
     const char *name = "";
     cJSON *tmp = cJSON_GetObjectItemCaseSensitive(body, "name");
@@ -458,6 +560,7 @@ static void route(SOCKET s, const char *method, const char *path, const char *bo
     if (!strcmp(method, "GET") && !strcmp(path, "/api/confirmations")) { api_confirmations(s); return; }
     if (!strcmp(method, "GET") && !strcmp(path, "/api/credentials")) { api_credentials_get(s); return; }
     if (!strcmp(method, "GET") && !strcmp(path, "/api/providers")) { api_providers_get(s); return; }
+    if (!strcmp(method, "GET") && !strcmp(path, "/api/vendors")) { api_vendors_get(s); return; }
 
     if ((!strcmp(method, "POST") && !strcmp(path, "/api/confirm")) ||
         (!strcmp(method, "POST") && !strcmp(path, "/api/exec")) ||
@@ -466,7 +569,9 @@ static void route(SOCKET s, const char *method, const char *path, const char *bo
         (!strcmp(method, "POST") && !strcmp(path, "/api/providers")) ||
         (!strcmp(method, "POST") && !strcmp(path, "/api/provider/active")) ||
         (!strcmp(method, "POST") && !strcmp(path, "/api/provider/key")) ||
-        (!strcmp(method, "POST") && !strcmp(path, "/api/provider/delete"))) {
+        (!strcmp(method, "POST") && !strcmp(path, "/api/provider/delete")) ||
+        (!strcmp(method, "POST") && !strcmp(path, "/api/provider/models")) ||
+        (!strcmp(method, "POST") && !strcmp(path, "/api/device/docker"))) {
         cJSON *b = NULL;
         if (body && body[0]) b = cJSON_Parse(body);
         if (!b) b = cJSON_CreateObject();
@@ -477,6 +582,8 @@ static void route(SOCKET s, const char *method, const char *path, const char *bo
         else if (!strcmp(path, "/api/provider/active")) api_provider_active(s, b);
         else if (!strcmp(path, "/api/provider/key")) api_provider_key(s, b);
         else if (!strcmp(path, "/api/provider/delete")) api_provider_delete(s, b);
+        else if (!strcmp(path, "/api/provider/models")) api_provider_models(s, b);
+        else if (!strcmp(path, "/api/device/docker")) api_device_docker(s, b);
         else api_agent(s, b);
         cJSON_Delete(b);
         return;
