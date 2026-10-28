@@ -34,6 +34,7 @@ void config_defaults(Config *c) {
     c->confirm_timeout_s = 120;
     c->store_plaintext = false;
     c->trace_upstream = true;
+    setstr(c->authorization, sizeof(c->authorization), "semi");
     c->agent.enabled = false;
     c->agent.base_url[0] = 0;
     c->agent.model[0] = 0;
@@ -45,6 +46,7 @@ void config_defaults(Config *c) {
     setstr(c->web_root, sizeof(c->web_root), "web");
     setstr(c->providers_path, sizeof(c->providers_path), "providers.json");
     setstr(c->apikeys_path, sizeof(c->apikeys_path), "apikeys.dat");
+    setstr(c->rollback_path, sizeof(c->rollback_path), "rollback.log");
 }
 
 int config_load(Config *c, const char *path) {
@@ -73,6 +75,7 @@ int config_load(Config *c, const char *path) {
     c->confirm_timeout_s = jint(root, "confirm_timeout_s", c->confirm_timeout_s);
     c->store_plaintext = jbool(root, "store_plaintext", c->store_plaintext);
     c->trace_upstream = jbool(root, "trace_upstream", c->trace_upstream);
+    setstr(c->authorization, sizeof(c->authorization), jstr(root, "authorization", c->authorization));
 
     const cJSON *ag = cJSON_GetObjectItemCaseSensitive(root, "agent");
     if (cJSON_IsObject(ag)) {
@@ -89,6 +92,7 @@ int config_load(Config *c, const char *path) {
     setstr(c->web_root, sizeof(c->web_root), jstr(root, "web_root", c->web_root));
     setstr(c->providers_path, sizeof(c->providers_path), jstr(root, "providers_path", c->providers_path));
     setstr(c->apikeys_path, sizeof(c->apikeys_path), jstr(root, "apikeys_path", c->apikeys_path));
+    setstr(c->rollback_path, sizeof(c->rollback_path), jstr(root, "rollback_path", c->rollback_path));
 
     cJSON_Delete(root);
 
@@ -106,6 +110,7 @@ int config_save(const Config *c, const char *path) {
     cJSON_AddNumberToObject(root, "confirm_timeout_s", c->confirm_timeout_s);
     cJSON_AddBoolToObject(root, "store_plaintext", c->store_plaintext ? 1 : 0);
     cJSON_AddBoolToObject(root, "trace_upstream", c->trace_upstream ? 1 : 0);
+    cJSON_AddStringToObject(root, "authorization", c->authorization);
 
     cJSON *ag = cJSON_CreateObject();
     cJSON_AddBoolToObject(ag, "enabled", c->agent.enabled ? 1 : 0);
@@ -121,6 +126,7 @@ int config_save(const Config *c, const char *path) {
     cJSON_AddStringToObject(root, "web_root", c->web_root);
     cJSON_AddStringToObject(root, "providers_path", c->providers_path);
     cJSON_AddStringToObject(root, "apikeys_path", c->apikeys_path);
+    cJSON_AddStringToObject(root, "rollback_path", c->rollback_path);
 
     char *s = cJSON_Print(root);
     cJSON_Delete(root);

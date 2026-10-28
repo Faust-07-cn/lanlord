@@ -9,6 +9,7 @@
 #include "sec/vault.h"
 #include "sec/risk.h"
 #include "sec/audit.h"
+#include "sec/rollback.h"
 #include "exec/exec.h"
 #include "agent/agent.h"
 #include "agent/tools.h"
@@ -56,6 +57,14 @@ static CredType parse_type(const char *s) {
 }
 
 int main(int argc, char **argv) {
+    /* Web 演示/服务模式：若是本进程独占的控制台（双击/start 启动）则隐藏窗口，后台静默运行。 */
+    for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "--demo") || !strcmp(argv[i], "--serve")) {
+            hide_own_console();
+            break;
+        }
+    }
+
     WSADATA wsa;
     WSAStartup(MAKEWORD(2, 2), &wsa);
 
@@ -72,6 +81,8 @@ int main(int argc, char **argv) {
     log_init(cfg.log_path, LOG_INFO);
     audit_init(cfg.audit_path);
     risk_init();
+    risk_set_auth_mode(risk_auth_mode_from_str(cfg.authorization));
+    rollback_init(cfg.rollback_path);
 
     if (argc < 2) { usage(argv[0]); return 1; }
 

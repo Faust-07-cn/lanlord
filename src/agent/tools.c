@@ -6,6 +6,7 @@
 #include "exec/exec.h"
 #include "exec/docker.h"
 #include "net/topo.h"
+#include "sec/rollback.h"
 #include <iphlpapi.h>
 #include <icmpapi.h>
 #include <stdlib.h>
@@ -160,6 +161,17 @@ static int t_cred_add(const cJSON *a, ToolContext *ctx, char *out, size_t n) {
     char id[40]; snprintf(id, sizeof(id), "%s", c.id);
     cred_zeroize(&c);
     if (rc != E_OK) { snprintf(out, n, "{\"error\":\"vault store rc=%d\"}", rc); return rc; }
+
+    /* Reversible: rollback = delete the credential just created. */
+    RollbackEntry rb; memset(&rb, 0, sizeof(rb));
+    snprintf(rb.kind, sizeof(rb.kind), "credential.add");
+    snprintf(rb.target, sizeof(rb.target), "%s", label ? label : "");
+    snprintf(rb.summary, sizeof(rb.summary), "新增凭据 %s", label ? label : "");
+    snprintf(rb.rkind, sizeof(rb.rkind), "credential.delete");
+    snprintf(rb.cred_id, sizeof(rb.cred_id), "%s", id);
+    snprintf(rb.mode, sizeof(rb.mode), "%s", risk_auth_mode_str());
+    rollback_record(&rb, NULL, 0);
+
     cJSON *r = cJSON_CreateObject();
     cJSON_AddStringToObject(r, "status", "stored");
     cJSON_AddStringToObject(r, "id", id);
@@ -171,6 +183,20 @@ static int t_cred_add(const cJSON *a, ToolContext *ctx, char *out, size_t n) {
 }
 
 /* ---------- registry ---------- */
+
+const char *tool_rollback_cmd(const ToolDef *td, const cJSON *args) {
+    if (!td || !args) return NULL;
+    if (strcmp(td->name, "exec.local") != 0 && strcmp(td->name, "exec.remote") != 0) return NULL;
+    const cJSON *it = cJSON_GetObjectItemCaseSensitive(args, "rollback");
+    if (cJSON_IsString(it) && it->valuestring && it->valuestring[0]) return it->valuestring;
+    return NULL;
+}
+
+int tool_is_rollbackable(const ToolDef *td, const cJSON *args) {
+    if (!td) return 0;
+    if (!strcmp(td->name, "credential.add")) return 1;
+    return tool_rollback_cmd(td, args) != NULL;
+}
 
 #define TOOL(name, desc, schema, r, h) { name, desc, schema, r, NULL, h }
 #define TOOL_DYN(name, desc, schema, r, rf, h) { name, desc, schema, r, rf, h }
@@ -185,12 +211,12 @@ static const ToolDef REGISTRY[] = {
          "{\"type\":\"object\",\"properties\":{\"ip\":{\"type\":\"string\"}},\"required\":[\"ip\"]}",
          RISK_READ, t_ping),
     TOOL("exec.local",
-         "在管理机本机执行一条命令（cmd.exe /c）。",
-         "{\"type\":\"object\",\"properties\":{\"command\":{\"type\":\"string\"}},\"required\":[\"command\"]}",
+         "在管理机本机执行一条命令（cmd.exe /c）。可附带 rollback 逆向命令以便完全授权下自动执行并回滚。",
+         "{\"type\":\"object\",\"properties\":{\"command\":{\"type\":\"string\"},\"rollback\":{\"type\":\"string\",\"description\":\"可选的逆向命令，用于回滚本次操作\"}},\"required\":[\"command\"]}",
          RISK_WRITE, t_exec_local),
     TOOL_DYN("exec.remote",
-         "在局域网内某台设备上执行命令。Linux 设备走 SSH；escalate=true 时用 sudo 提权。",
-         "{\"type\":\"object\",\"properties\":{\"ip\":{\"type\":\"string\"},\"cred_id\":{\"type\":\"string\"},\"command\":{\"type\":\"string\"},\"escalate\":{\"type\":\"boolean\"}},\"required\":[\"ip\",\"cred_id\",\"command\"]}",
+         "在局域网内某台设备上执行命令。Linux 设备走 SSH；escalate=true 时用 sudo 提权。可附带 rollback 逆向命令以便完全授权下自动执行并回滚。",
+         "{\"type\":\"object\",\"properties\":{\"ip\":{\"type\":\"string\"},\"cred_id\":{\"type\":\"string\"},\"command\":{\"type\":\"string\"},\"escalate\":{\"type\":\"boolean\"},\"rollback\":{\"type\":\"string\",\"description\":\"可选的逆向命令，用于回滚本次操作\"}},\"required\":[\"ip\",\"cred_id\",\"command\"]}",
          RISK_WRITE, exec_remote_risk, t_exec_remote),
     TOOL("docker.ps",
          "列出局域网内某台设备上的 Docker 容器（经 SSH 执行 docker ps）。",

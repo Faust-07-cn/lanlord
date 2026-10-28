@@ -71,6 +71,13 @@
     </div>
     <div id="prov-list"></div>
 
+    <h3>Agent 授权模式 <span class="dim">（Agent 权限与操作用户等价）</span></h3>
+    <div class="row">
+      <label class="chk"><input type="radio" name="auth-mode" value="semi"> 半授权：风险指令逐次确认</label>
+      <label class="chk"><input type="radio" name="auth-mode" value="full"> 完全授权：可回滚指令自动执行</label>
+    </div>
+    <p class="hint">完全授权下仅「可回滚」操作会自动执行；无可回滚方案的操作仍会弹出人工确认。</p>
+
     <h3>凭证管理 <span class="dim">（用户名与密码均 DPAPI 加密存储）</span></h3>
     <div class="row">
       <input id="cred-label" placeholder="标签">
@@ -83,6 +90,10 @@
       <button id="btn-cred">保存</button>
     </div>
     <ul id="cred-list" class="credlist"></ul>
+
+    <h3>操作记录（可回滚） <span class="dim">（Agent 自动/已批准执行的变更）</span></h3>
+    <div class="row"><button id="btn-rollback-refresh">刷新</button></div>
+    <ul id="rollback-list" class="credlist"></ul>
   </div>
 </div>
 

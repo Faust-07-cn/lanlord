@@ -42,6 +42,11 @@ void *lxmalloc(size_t n);
 /* Monotonic milliseconds since boot. */
 int64_t now_ms(void);
 
+/* Hide the console window when this process owns it (double-click / `start`),
+ * but leave it visible when launched from an existing terminal. No-op under
+ * ConPTY / redirection (GetConsoleWindow()==NULL). Windows only. */
+void hide_own_console(void);
+
 /* Upper-case hex MAC, e.g. "A0:1B:2C:3D:4E:5F". */
 void mac_format(const unsigned char mac[6], char *out, size_t len);
 

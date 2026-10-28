@@ -4,7 +4,8 @@
 #include "core/config.h"
 #include "sec/vault.h"
 
-/* Serve the demo web UI + JSON API on 127.0.0.1:cfg->port until stopped. */
-int web_server_run(const Config *cfg, Vault *vault);
+/* Serve the demo web UI + JSON API on 127.0.0.1:cfg->port until stopped.
+ * cfg is mutable so /api/auth can update + persist the authorization mode. */
+int web_server_run(Config *cfg, Vault *vault);
 
 #endif

@@ -8,6 +8,7 @@
 #include "log.h"
 #include "sec/audit.h"
 #include "sec/keystore.h"
+#include "sec/rollback.h"
 #include "cJSON.h"
 #include <stdlib.h>
 #include <string.h>
@@ -17,6 +18,49 @@ static const char *jstr_get(const cJSON *o, const char *k) {
     if (!o) return NULL;
     const cJSON *it = cJSON_GetObjectItemCaseSensitive(o, k);
     return cJSON_IsString(it) ? it->valuestring : NULL;
+}
+
+static int jboolv(const cJSON *o, const char *k, int def) {
+    if (!o) return def;
+    const cJSON *it = cJSON_GetObjectItemCaseSensitive(o, k);
+    if (cJSON_IsBool(it)) return cJSON_IsTrue(it) ? 1 : 0;
+    return def;
+}
+
+/* Short display target for audit / rollback summary. */
+static void tool_display_target(const ToolDef *td, const cJSON *args, char *out, size_t n) {
+    if (td && !strcmp(td->name, "exec.remote")) {
+        const char *ip = jstr_get(args, "ip");
+        snprintf(out, n, "%s", ip ? ip : "remote");
+    } else if (td && !strcmp(td->name, "exec.local")) {
+        snprintf(out, n, "local");
+    } else if (td && !strcmp(td->name, "credential.add")) {
+        snprintf(out, n, "credential");
+    } else {
+        snprintf(out, n, "%s", td ? td->name : "?");
+    }
+}
+
+/* Record a rollback entry for an exec tool that carried an explicit reverse command. */
+static void record_exec_rollback(const ToolDef *td, const cJSON *args, const char *rb_cmd, int auto_run) {
+    RollbackEntry rb; memset(&rb, 0, sizeof(rb));
+    snprintf(rb.kind, sizeof(rb.kind), "%s", td->name);
+    snprintf(rb.rkind, sizeof(rb.rkind), "%s", td->name);
+    snprintf(rb.rcmd, sizeof(rb.rcmd), "%s", rb_cmd ? rb_cmd : "");
+    snprintf(rb.mode, sizeof(rb.mode), "%s", auto_run ? "full" : "semi");
+    const char *cmd = jstr_get(args, "command");
+    snprintf(rb.summary, sizeof(rb.summary), "%s", cmd ? cmd : "");
+    if (!strcmp(td->name, "exec.remote")) {
+        const char *ip = jstr_get(args, "ip");
+        const char *cred = jstr_get(args, "cred_id");
+        snprintf(rb.rip, sizeof(rb.rip), "%s", ip ? ip : "");
+        snprintf(rb.rcred, sizeof(rb.rcred), "%s", cred ? cred : "");
+        snprintf(rb.target, sizeof(rb.target), "%s", ip ? ip : "");
+        rb.resc = jboolv(args, "escalate", 0);
+    } else {
+        snprintf(rb.target, sizeof(rb.target), "local");
+    }
+    rollback_record(&rb, NULL, 0);
 }
 
 /* Build the full request URL from base_url + endpoint (normalizing the slash). */
@@ -75,7 +119,9 @@ int agent_run(Vault *v, const Config *cfg, const char *requirement, char *out, s
     cJSON_AddStringToObject(sys, "role", "system");
     cJSON_AddStringToObject(sys, "content",
         "你是局域网管理系统(lanmgr)的内嵌管理 Agent。你只能调用提供的工具完成任务，不要虚构工具调用。"
-        "状态变更/高危操作会触发生效前的人工确认，由用户在界面上批准或拒绝。用简洁中文答复用户。");
+        "在调用 exec.local 或 exec.remote 等会改变状态的操作时，尽量同时给出一个可用的 rollback 逆向命令，"
+        "让系统能够在你被完全授权时自动执行并在需要时回滚；若无法给出可信的逆向命令，该操作仍需用户在界面上批准。"
+        "状态变更/高危操作按当前授权模式(tool loop 内)处理：半授权需用户逐次批准，完全授权下仅可逆操作会自动执行。用简洁中文答复用户。");
     cJSON_AddItemToArray(messages, sys);
     cJSON *usr = cJSON_CreateObject();
     cJSON_AddStringToObject(usr, "role", "user");
@@ -138,18 +184,42 @@ int agent_run(Vault *v, const Config *cfg, const char *requirement, char *out, s
                     snprintf(result, sizeof(result), "{\"error\":\"unknown tool %s\"}", name ? name : "");
                 } else {
                     RiskLevel risk = td->risk_of ? td->risk_of(args) : td->risk;
+                    int rollbackable = tool_is_rollbackable(td, args);
+                    const char *rb_cmd = tool_rollback_cmd(td, args);
+                    int auto_run = 0;
                     int approved = 1;
+
                     if (risk_requires_confirm(risk)) {
-                        char summary[512];
-                        snprintf(summary, sizeof(summary), "Agent 请求调用工具 %s", td->name);
-                        Confirmation cf;
-                        risk_request(risk, summary, args_json ? args_json : "{}", cfg->confirm_timeout_s, &cf);
-                        audit_log("agent", td->name, td->name, "pending", summary);
-                        approved = wait_confirm(cf.id, cfg->confirm_timeout_s);
-                        audit_log("agent", td->name, td->name, approved ? "approved" : "denied", summary);
+                        AuthMode mode = risk_auth_mode();
+                        if (mode == AUTH_FULL && rollbackable) {
+                            /* 完全授权且可回滚：直接执行，执行后记录回滚方案。 */
+                            auto_run = 1;
+                        } else {
+                            char summary[512];
+                            snprintf(summary, sizeof(summary), "Agent 请求调用工具 %s%s",
+                                     td->name,
+                                     (mode == AUTH_FULL && !rollbackable) ? "（完全授权但无可回滚方案，需人工确认）" : "");
+                            Confirmation cf;
+                            risk_request(risk, summary, args_json ? args_json : "{}", cfg->confirm_timeout_s, &cf);
+                            audit_log("agent", td->name, td->name, "pending", summary);
+                            approved = wait_confirm(cf.id, cfg->confirm_timeout_s);
+                            audit_log("agent", td->name, td->name, approved ? "approved" : "denied", summary);
+                        }
                     }
+
                     if (approved) {
                         td->handler(args, &tctx, result, sizeof(result));
+                        if (rb_cmd && rb_cmd[0]) {
+                            /* Exec 工具带逆向命令：持久化回滚方案。 */
+                            record_exec_rollback(td, args, rb_cmd, auto_run);
+                        }
+                        if (auto_run) {
+                            char tgt[256];
+                            tool_display_target(td, args, tgt, sizeof(tgt));
+                            char sum[512];
+                            snprintf(sum, sizeof(sum), "Agent 请求调用工具 %s（完全授权自动执行）", td->name);
+                            audit_log("agent", td->name, tgt, "executed-full", sum);
+                        }
                     } else {
                         snprintf(result, sizeof(result), "{\"error\":\"用户拒绝该操作\"}");
                     }

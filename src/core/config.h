@@ -11,6 +11,8 @@ typedef struct {
     bool   store_plaintext;    /* DEFAULT FALSE; explicit opt-in only */
     bool   trace_upstream;     /* traceroute to discover upstream routers */
 
+    char   authorization[16];  /* Agent auth mode: "semi" | "full" */
+
     struct {
         bool   enabled;
         char   base_url[256];
@@ -25,6 +27,7 @@ typedef struct {
     char   web_root[512];
     char   providers_path[512];  /* Agent 提供方配置(调用/请求地址/模型) */
     char   apikeys_path[512];    /* 独立 API Key 密钥库(DPAPI 加密) */
+    char   rollback_path[512];   /* Agent 回滚日志(JSON 行,可回滚操作历史) */
 } Config;
 
 void config_defaults(Config *c);

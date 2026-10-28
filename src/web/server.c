@@ -7,6 +7,7 @@
 #include "net/topo.h"
 #include "sec/risk.h"
 #include "sec/audit.h"
+#include "sec/rollback.h"
 #include "exec/exec.h"
 #include "exec/docker.h"
 #include "agent/agent.h"
@@ -22,7 +23,7 @@
 #define LANMGR_VERSION "0.1.0"
 #define MAX_REQ 65536
 
-static const Config *g_cfg;
+static Config *g_cfg;
 static Vault *g_vault;
 
 static char *g_topology = NULL;      /* cached topology JSON (UTF-8) */
@@ -134,6 +135,8 @@ static void api_status(SOCKET s) {
     cJSON_AddStringToObject(o, "provider", p && p->name[0] ? p->name : "");
     cJSON_AddStringToObject(o, "model", p ? p->model : "");
     cJSON_AddBoolToObject(o, "agent_ready", (p && has_key) ? 1 : 0);
+    cJSON_AddStringToObject(o, "authorization", risk_auth_mode_str());
+    cJSON_AddNumberToObject(o, "rollback_count", rollback_applied_count());
     send_json(s, o);
     cJSON_Delete(o);
 }
@@ -551,6 +554,91 @@ static void api_job(SOCKET s, const char *idstr) {
     cJSON_Delete(o);
 }
 
+static void api_auth(SOCKET s, cJSON *body) {
+    const char *mode = "";
+    cJSON *m = cJSON_GetObjectItemCaseSensitive(body, "mode");
+    if (cJSON_IsString(m)) mode = m->valuestring;
+    if (strcmp(mode, "semi") != 0 && strcmp(mode, "full") != 0) {
+        send_err(s, 400, "mode must be semi or full");
+        return;
+    }
+    risk_set_auth_mode(risk_auth_mode_from_str(mode));
+    snprintf(g_cfg->authorization, sizeof(g_cfg->authorization), "%s", risk_auth_mode_str());
+    config_save(g_cfg, "config.json");
+    audit_log("web", "auth-mode", "agent", risk_auth_mode_str(), mode);
+
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddStringToObject(o, "status", "ok");
+    cJSON_AddStringToObject(o, "authorization", risk_auth_mode_str());
+    send_json(s, o);
+    cJSON_Delete(o);
+}
+
+static void api_rollback_get(SOCKET s) {
+    RollbackEntry list[128];
+    int n = rollback_list(list, 128);
+    cJSON *arr = cJSON_CreateArray();
+    for (int i = 0; i < n; i++) {
+        RollbackEntry *e = &list[i];
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddStringToObject(o, "id", e->id);
+        cJSON_AddNumberToObject(o, "created_ms", (double)e->created_ms);
+        cJSON_AddStringToObject(o, "kind", e->kind);
+        cJSON_AddStringToObject(o, "target", e->target);
+        cJSON_AddStringToObject(o, "summary", e->summary);
+        cJSON_AddStringToObject(o, "mode", e->mode);
+        cJSON_AddNumberToObject(o, "status", e->status);
+        cJSON_AddItemToArray(arr, o);
+    }
+    send_json(s, arr);
+    cJSON_Delete(arr);
+}
+
+static void api_rollback_post(SOCKET s, cJSON *body) {
+    cJSON *idj = cJSON_GetObjectItemCaseSensitive(body, "id");
+    if (!cJSON_IsString(idj)) { send_err(s, 400, "id required"); return; }
+
+    RollbackEntry e;
+    if (rollback_get(idj->valuestring, &e) != E_OK) { send_err(s, 404, "rollback entry not found"); return; }
+    if (e.status != ROLLBACK_APPLIED) { send_err(s, 400, "already processed"); return; }
+
+    int rc = E_OK;
+    char msg[512];
+    msg[0] = 0;
+    if (!strcmp(e.rkind, "credential.delete")) {
+        if (vault_delete(g_vault, e.cred_id) != E_OK) {
+            rc = E_NOTFOUND;
+            snprintf(msg, sizeof(msg), "凭据不存在或已删除");
+        }
+    } else if (!strcmp(e.rkind, "exec.local")) {
+        ExecOpts o = {false, 25};
+        char ob[8192];
+        rc = exec_local_run(e.rcmd, &o, ob, sizeof(ob));
+        if (rc != E_OK) snprintf(msg, sizeof(msg), "回滚命令执行失败 rc=%d", rc);
+    } else if (!strcmp(e.rkind, "exec.remote")) {
+        ExecOpts o = {e.resc != 0, 30};
+        char ob[8192];
+        rc = exec_remote_run(g_vault, e.rip, e.rcred, e.rcmd, &o, ob, sizeof(ob));
+        if (rc != E_OK) snprintf(msg, sizeof(msg), "回滚命令执行失败 rc=%d", rc);
+    } else {
+        rc = E_UNSUPPORTED;
+        snprintf(msg, sizeof(msg), "未知回滚类型 %s", e.rkind);
+    }
+
+    if (rc == E_OK) {
+        rollback_mark(e.id, ROLLBACK_ROLLED_BACK);
+        audit_log("web", "rollback", e.id, "rolled_back", e.summary);
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddStringToObject(o, "status", "rolled_back");
+        send_json(s, o);
+        cJSON_Delete(o);
+    } else {
+        rollback_mark(e.id, ROLLBACK_FAILED);
+        audit_log("web", "rollback", e.id, "failed", msg);
+        send_err(s, 500, msg[0] ? msg : "rollback failed");
+    }
+}
+
 /* ---------- routing ---------- */
 
 static void route(SOCKET s, const char *method, const char *path, const char *body) {
@@ -561,6 +649,7 @@ static void route(SOCKET s, const char *method, const char *path, const char *bo
     if (!strcmp(method, "GET") && !strcmp(path, "/api/credentials")) { api_credentials_get(s); return; }
     if (!strcmp(method, "GET") && !strcmp(path, "/api/providers")) { api_providers_get(s); return; }
     if (!strcmp(method, "GET") && !strcmp(path, "/api/vendors")) { api_vendors_get(s); return; }
+    if (!strcmp(method, "GET") && !strcmp(path, "/api/rollback")) { api_rollback_get(s); return; }
 
     if ((!strcmp(method, "POST") && !strcmp(path, "/api/confirm")) ||
         (!strcmp(method, "POST") && !strcmp(path, "/api/exec")) ||
@@ -571,7 +660,9 @@ static void route(SOCKET s, const char *method, const char *path, const char *bo
         (!strcmp(method, "POST") && !strcmp(path, "/api/provider/key")) ||
         (!strcmp(method, "POST") && !strcmp(path, "/api/provider/delete")) ||
         (!strcmp(method, "POST") && !strcmp(path, "/api/provider/models")) ||
-        (!strcmp(method, "POST") && !strcmp(path, "/api/device/docker"))) {
+        (!strcmp(method, "POST") && !strcmp(path, "/api/device/docker")) ||
+        (!strcmp(method, "POST") && !strcmp(path, "/api/auth")) ||
+        (!strcmp(method, "POST") && !strcmp(path, "/api/rollback"))) {
         cJSON *b = NULL;
         if (body && body[0]) b = cJSON_Parse(body);
         if (!b) b = cJSON_CreateObject();
@@ -584,6 +675,8 @@ static void route(SOCKET s, const char *method, const char *path, const char *bo
         else if (!strcmp(path, "/api/provider/delete")) api_provider_delete(s, b);
         else if (!strcmp(path, "/api/provider/models")) api_provider_models(s, b);
         else if (!strcmp(path, "/api/device/docker")) api_device_docker(s, b);
+        else if (!strcmp(path, "/api/auth")) api_auth(s, b);
+        else if (!strcmp(path, "/api/rollback")) api_rollback_post(s, b);
         else api_agent(s, b);
         cJSON_Delete(b);
         return;
@@ -644,7 +737,7 @@ static void handle_client(SOCKET s) {
     free(body);
 }
 
-int web_server_run(const Config *cfg, Vault *vault) {
+int web_server_run(Config *cfg, Vault *vault) {
     g_cfg = cfg;
     g_vault = vault;
     InitializeCriticalSection(&g_topo_lock);

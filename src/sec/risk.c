@@ -13,10 +13,36 @@ static Confirmation g_pending[MAX_PENDING];
 static int g_count = 0;
 static CRITICAL_SECTION g_lock;
 static int g_inited = 0;
+static AuthMode g_auth_mode = AUTH_SEMI;
 
 int risk_init(void) {
     if (!g_inited) { InitializeCriticalSection(&g_lock); g_inited = 1; }
     return 0;
+}
+
+void risk_set_auth_mode(AuthMode m) {
+    risk_init();
+    EnterCriticalSection(&g_lock);
+    g_auth_mode = m;
+    LeaveCriticalSection(&g_lock);
+}
+
+AuthMode risk_auth_mode(void) {
+    risk_init();
+    AuthMode m;
+    EnterCriticalSection(&g_lock);
+    m = g_auth_mode;
+    LeaveCriticalSection(&g_lock);
+    return m;
+}
+
+const char *risk_auth_mode_str(void) {
+    return risk_auth_mode() == AUTH_FULL ? "full" : "semi";
+}
+
+AuthMode risk_auth_mode_from_str(const char *s) {
+    if (s && !strcmp(s, "full")) return AUTH_FULL;
+    return AUTH_SEMI;
 }
 
 const char *risk_level_str(RiskLevel lvl) {

@@ -29,30 +29,35 @@
 
 ## 快速开始
 
-前置条件：Windows 10/11 x64、PowerShell 5.1+、能访问 GitHub（用于下载便携工具链）。
+前置条件：Windows 10/11 x64、PowerShell 5.1+。构建工具链（MinGW-w64 16.2.0 + CMake 4.4.4）已内置在项目 `tools\` 目录，无需联网下载或单独安装。
 
 ```powershell
-# 1) 一次性引导工具链（便携 MinGW-w64 + CMake，免管理员）
-pwsh -File .\scripts\bootstrap.ps1
-. .\scripts\env.ps1
-
-# 2) 编译（产物：E:\Chengdu_DB_soft\build\lanmgr.exe）
+# 编译：工具链缺失时会自动下载，之后无需重复下载
 pwsh -File .\build.ps1
 
-# 3) 启动演示（自动打开 http://127.0.0.1:8686）
-E:\Chengdu_DB_soft\build\lanmgr.exe --demo
+# 启动演示（后台静默启动，无命令行窗口，自动打开 http://127.0.0.1:8686）
+.\build\lanmgr.exe --demo
 ```
 
-也可以直接用 CMake：
+> `--demo` / `--serve` 采用后台静默启动：从资源管理器 / 快捷方式 / `start` 启动时不弹出命令行窗口，仅在浏览器中呈现；
+> 结束进程请用任务管理器或 `taskkill`（也可用 `--service-install` 注册为 Windows 服务）。从既有终端手动运行时日志仍会打印到该终端。
+
+> 工具链与产物会自动解析到 **ASCII 路径**（规避 MinGW `ld` 对非 ASCII/GBK 路径的缺陷）：
+> - 项目路径为 ASCII → 工具链在项目内 `tools\`，产物在 `build\`；
+> - 项目路径含中文 → 工具链在项目旁的 `..\lanlord-tools\`，产物在 `..\build\`。
+>
+> 本机项目路径为 ASCII（`E:\Chengdu_DB_soft\lanlord`），工具链已内置在项目内 `tools\`（`tools\mingw64` + `tools\cmake`），产物在 `build\`。
+> 也可手动引导：`pwsh -File .\scripts\bootstrap.ps1`，再 `. .\scripts\env.ps1` 加入 PATH。
+>
+> `--demo` / `--serve` 请在项目根目录运行（`web/`、`vault.dat`、`audit.log` 相对于当前工作目录）。
+
+也可以直接用 CMake（需先引导好工具链）：
 
 ```powershell
 cmake -S . -B build-cmake -G "MinGW Makefiles"
 cmake --build build-cmake
 ctest --test-dir build-cmake --output-on-failure
 ```
-
-> `--demo` / `--serve` 请在项目根目录运行：`web/`、`vault.dat`、`audit.log` 等路径都相对于当前工作目录。
-> `build.ps1` 固定输出到 ASCII 目录，以规避 MinGW `ld` 处理 GBK 路径的缺陷。
 
 ---
 
@@ -63,13 +68,13 @@ ctest --test-dir build-cmake --output-on-failure
 - **网络拓扑**：光猫 / 路由器为根，自上而下展开设备树；点击设备可查看其 Docker 容器
 - **Agent 助手**：只输入自然语言需求，由模型自行选择工具
 - **执行命令**：本地 / 远程命令，变更类操作弹出确认框
-- **设置**：Agent 提供方（选供应商自动填地址、一键拉取模型列表）、设备凭据管理
+- **设置**：Agent 提供方（选供应商自动填地址、一键拉取模型列表）、设备凭据管理、Agent 授权模式、操作回滚
 
 对应接口（`src/web/server.c`）：
 
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
-| GET | `/api/status` | 版本 / 当前提供方 / 端口等状态 |
+| GET | `/api/status` | 版本 / 当前提供方 / 授权模式 / 回滚数等状态 |
 | GET | `/api/topology` | 读取最近一次拓扑 |
 | POST | `/api/discover` | 触发后台扫描（异步任务） |
 | GET | `/api/job/<id>` | 查询异步任务进度 |
@@ -82,6 +87,8 @@ ctest --test-dir build-cmake --output-on-failure
 | POST | `/api/provider/active`、`/api/provider/key`、`/api/provider/delete`、`/api/provider/models` | 切换、设置 Key、删除、拉取模型 |
 | GET | `/api/vendors` | 内置供应商预设 |
 | POST | `/api/device/docker` | SSH 到目标机执行 `docker ps` |
+| POST | `/api/auth` | 切换 Agent 授权模式 `semi` / `full` |
+| GET/POST | `/api/rollback` | 列出可回滚操作 / 执行回滚 |
 
 ---
 
@@ -154,6 +161,7 @@ lanmgr --agent "扫一下局域网，告诉我网关和在线设备"
 | `scan_timeout_ms` | `400` | 单主机探测超时 |
 | `confirm_timeout_s` | `120` | 风险确认等待时长，超时自动拒绝 |
 | `store_plaintext` | `false` | 是否允许明文存储凭据（仅调试用，会写 WARN 审计） |
+| `authorization` | `semi` | Agent 授权模式：`semi` 半授权 / `full` 完全授权 |
 | `agent.max_turns` | `10` | Agent 工具调用最大轮数 |
 | `agent.timeout_s` | `60` | 单次模型请求超时 |
 | `vault_path` | `vault.dat` | 凭据保险箱 |
@@ -162,6 +170,7 @@ lanmgr --agent "扫一下局域网，告诉我网关和在线设备"
 | `web_root` | `web` | 前端静态资源目录 |
 | `providers_path` | `providers.json` | 提供方元数据（不含密钥） |
 | `apikeys_path` | `apikeys.dat` | API Key 加密库 |
+| `rollback_path` | `rollback.log` | Agent 回滚日志（JSON 行，可回滚操作历史） |
 
 ---
 
@@ -184,11 +193,22 @@ Agent 运行时读取「当前（active）」提供方，把 `base_url + endpoin
 | --- | --- | --- |
 | `topology.get` | READ | 获取局域网拓扑树 |
 | `ping` | READ | Ping 指定 IP 判断在线 |
-| `exec.local` | WRITE | 在管理机本机执行命令 |
-| `exec.remote` | WRITE（动态） | 在远程设备执行；`escalate=true` 时 sudo 提权，风险等级随参数上调 |
+| `exec.local` | WRITE | 在管理机本机执行命令（可选 `rollback` 逆向命令以便回滚） |
+| `exec.remote` | WRITE（动态） | 在远程设备执行；`escalate=true` 时 sudo 提权，风险等级随参数上调（可选 `rollback`） |
 | `docker.ps` | READ | 经 SSH 列出目标机 Docker 容器 |
 | `credential.list` | READ | 列出凭据（不含密码） |
-| `credential.add` | DESTRUCTIVE | 新增设备凭据 |
+| `credential.add` | DESTRUCTIVE | 新增设备凭据（自动可回滚：回滚即删除该凭据） |
+
+## Agent 授权模式（半授权 / 完全授权）
+
+Agent 权限与操作用户等价，在设置面板或 `config.json` 的 `authorization` 字段切换：
+
+- **半授权 `semi`（默认）**：`WRITE` / `DESTRUCTIVE` 操作逐次弹出人工确认，批准后执行。
+- **完全授权 `full`**：可直接执行风险指令，但**必须可回滚**——仅「可回滚」操作自动执行并进入回滚历史；
+  无可回滚方案的操作仍自动降级为人工确认。可一键回滚（`/api/rollback`）。
+
+回滚能力来源：`exec.*` 由模型提供的 `rollback` 逆向命令；`credential.add` 由系统自动推导（删除该凭据）。
+所有自动化执行与回滚动作均写入 `audit.log`。
 
 ---
 
@@ -197,6 +217,7 @@ Agent 运行时读取「当前（active）」提供方，把 `base_url + endpoin
 - **加密存储**：用户名、密码、API Key 全部经 DPAPI（机器级）加密；`vault.dat` 含魔数头，无明文。
 - **密钥分离**：设备凭据与 Agent API Key 分别存于 `vault.dat` 与 `apikeys.dat`。
 - **风险分级**：`READ` 直通，`WRITE` / `DESTRUCTIVE` 生成确认单，等待用户批准，超时自动拒绝。
+- **授权分级**：半授权 = 风险操作逐次确认；完全授权 = 可回滚操作自动执行、不可回滚操作仍确认；回滚历史落 `rollback.log`。
 - **审计留痕**：`audit.log` 每行一条 JSON，记录 actor / action / target / decision。
 - **内存卫生**：密钥使用后 `SecureZeroMemory` 归零，日志对密钥做 redact。
 - **网络暴露面**：Web 服务仅监听 `127.0.0.1`，不默认对局域网开放。

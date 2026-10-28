@@ -264,7 +264,8 @@ async function refreshStatus() {
     const s = await api('/api/status');
     $('#ver').textContent = s.version || '';
     const agent = s.agent_ready ? ('Agent: ' + (s.provider || '?') + ' ✓') : 'Agent: 未就绪';
-    $('#status').textContent = (s.ssh ? 'SSH ✓ ' : 'SSH ✗ ') + agent;
+    const auth = s.authorization === 'full' ? '完全授权' : '半授权';
+    $('#status').textContent = (s.ssh ? 'SSH ✓ ' : 'SSH ✗ ') + agent + ' · ' + auth;
   } catch (e) {}
 }
 
@@ -333,6 +334,69 @@ async function refreshCreds() {
     });
     if (cur) sel.value = cur;
   } catch (e) {}
+}
+
+/* ================= authorization mode + rollback ================= */
+
+async function refreshAuthMode() {
+  try {
+    const s = await api('/api/status');
+    const sel = document.querySelector('input[name="auth-mode"][value="' + (s.authorization || 'semi') + '"]');
+    if (sel) sel.checked = true;
+    return s;
+  } catch (e) {}
+}
+
+function kindLabel(kind) {
+  if (kind === 'credential.add') return '新增凭据';
+  if (kind === 'exec.remote') return '远程命令';
+  return '本机命令';
+}
+
+async function refreshRollbacks() {
+  const ul = $('#rollback-list');
+  ul.innerHTML = '';
+  try {
+    const list = await api('/api/rollback');
+    if (!list.length) { ul.innerHTML = '<li class="dim">（暂无操作记录）</li>'; return; }
+    list.forEach((e) => {
+      const li = document.createElement('li');
+      const done = e.status !== 0;
+      const modeTag = e.mode === 'full'
+        ? '<span class="dim" style="color:#9fe8a9">完全授权</span>'
+        : '<span class="dim">半授权</span>';
+      li.innerHTML = '<span class="' + (done ? 'dim' : 'host') + '">' + escapeHtml(kindLabel(e.kind)) +
+        ' · ' + escapeHtml(e.target || '') + '</span> ' + modeTag +
+        '<div class="dim" style="margin-left:12px;word-break:break-all">' + escapeHtml(e.summary || '') + '</div>';
+      const btns = document.createElement('div');
+      btns.className = 'row';
+      if (!done) {
+        const b = document.createElement('button');
+        b.textContent = '回滚';
+        b.onclick = () => doRollback(e.id, b);
+        btns.appendChild(b);
+      } else {
+        const s = document.createElement('span');
+        s.className = 'dim';
+        s.textContent = e.status === 1 ? '✓ 已回滚' : '✗ 回滚失败';
+        btns.appendChild(s);
+      }
+      li.appendChild(btns);
+      ul.appendChild(li);
+    });
+  } catch (e) {}
+}
+
+async function doRollback(id, btn) {
+  btn.disabled = true; btn.textContent = '回滚中…';
+  try {
+    await api('/api/rollback', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({id}) });
+    refreshRollbacks();
+  } catch (e) {
+    alert('回滚失败：' + (e.message || e));
+    btn.disabled = false; btn.textContent = '回滚';
+    refreshRollbacks();
+  }
 }
 
 /* ================= confirmations / exec / agent ================= */
@@ -475,13 +539,28 @@ $('#btn-cred').addEventListener('click', async () => {
   refreshCreds();
 });
 
+document.querySelectorAll('input[name="auth-mode"]').forEach((r) => {
+  r.addEventListener('change', async () => {
+    if (!r.checked) return;
+    try {
+      await api('/api/auth', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({mode: r.value}) });
+      refreshStatus();
+    } catch (e) { alert('切换授权模式失败：' + (e.message || e)); refreshAuthMode(); }
+  });
+});
+
+$('#btn-rollback-refresh').addEventListener('click', refreshRollbacks);
+
 (async function init() {
   refreshStatus();
   refreshTopology();
   refreshCreds();
   refreshProviders();
   refreshVendors();
+  refreshAuthMode();
+  refreshRollbacks();
   setInterval(refreshProviders, 8000);
   setInterval(refreshTopology, 60000);
   setInterval(refreshConfirmations, 2000);
+  setInterval(refreshRollbacks, 10000);
 })();

@@ -69,6 +69,14 @@ void *lxmalloc(size_t n) { return malloc(n); }
 
 int64_t now_ms(void) { return (int64_t)GetTickCount64(); }
 
+void hide_own_console(void) {
+    HWND h = GetConsoleWindow();
+    if (!h) return; /* no independent window (ConPTY / redirected stdio) */
+    DWORD pids[2];
+    DWORD n = GetConsoleProcessList(pids, 2);
+    if (n == 1) ShowWindow(h, SW_HIDE); /* only us => detached launch */
+}
+
 void mac_format(const unsigned char mac[6], char *out, size_t len) {
     snprintf(out, len, "%02X:%02X:%02X:%02X:%02X:%02X",
              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);

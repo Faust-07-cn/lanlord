@@ -6,6 +6,12 @@
 
 typedef enum { RISK_READ = 0, RISK_WRITE = 1, RISK_DESTRUCTIVE = 2 } RiskLevel;
 
+/* Agent authorization mode (Agent 权限与操作用户等价)。
+ * AUTH_SEMI: risky ops need per-action human approval (default).
+ * AUTH_FULL: risky ops may run directly ONLY when a rollback path exists;
+ *            otherwise they fall back to confirmation. */
+typedef enum { AUTH_SEMI = 0, AUTH_FULL = 1 } AuthMode;
+
 typedef struct {
     char     id[40];
     RiskLevel level;
@@ -37,5 +43,11 @@ int risk_pending(Confirmation *out, int max);
 
 int risk_init(void);
 const char *risk_level_json_str(RiskLevel lvl); /* "read"/"write"/"destructive" */
+
+/* Authorization mode (thread-safe, single authoritative live value). */
+void risk_set_auth_mode(AuthMode m);
+AuthMode risk_auth_mode(void);
+const char *risk_auth_mode_str(void);   /* "semi" / "full" */
+AuthMode risk_auth_mode_from_str(const char *s); /* unknown -> AUTH_SEMI */
 
 #endif
