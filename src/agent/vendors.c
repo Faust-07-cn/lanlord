@@ -7,14 +7,15 @@
 #include <string.h>
 
 static const VendorPreset VENDORS[] = {
-    { "deepseek",    "DeepSeek（深度求索）",       "https://api.deepseek.com",           "/v1/chat/completions",  "https://api.deepseek.com/models",            "deepseek-chat" },
-    { "openai",      "OpenAI",                     "https://api.openai.com",             "/v1/chat/completions",  "https://api.openai.com/v1/models",           "gpt-4o-mini" },
-    { "moonshot",    "Moonshot（月之暗面 Kimi）",   "https://api.moonshot.cn",            "/v1/chat/completions",  "https://api.moonshot.cn/v1/models",          "moonshot-v1-8k" },
-    { "ark",         "火山方舟 ARK（豆包）",        "https://ark.cn-beijing.volces.com",  "/api/v3/chat/completions","https://ark.cn-beijing.volces.com/api/v3/models", "" },
-    { "openrouter",  "OpenRouter",                 "https://openrouter.ai/api",          "/v1/chat/completions",  "https://openrouter.ai/api/v1/models",        "" },
-    { "groq",        "Groq",                       "https://api.groq.com/openai",        "/v1/chat/completions",  "https://api.groq.com/openai/v1/models",      "" },
-    { "siliconflow", "SiliconFlow（硅基流动）",     "https://api.siliconflow.cn",         "/v1/chat/completions",  "https://api.siliconflow.cn/v1/models",       "deepseek-ai/DeepSeek-V3" },
-    { "ollama",      "Ollama（本地）",              "http://localhost:11434",             "/v1/chat/completions",  "http://localhost:11434/api/tags",           "" },
+    { "deepseek",    "DeepSeek（深度求索）",       "https://api.deepseek.com",           "/v1/chat/completions",  "https://api.deepseek.com/models",            "deepseek-chat", 0 },
+    { "openai",      "OpenAI",                     "https://api.openai.com",             "/v1/chat/completions",  "https://api.openai.com/v1/models",           "gpt-4o-mini", 0 },
+    { "moonshot",    "Moonshot（月之暗面 Kimi）",   "https://api.moonshot.cn",            "/v1/chat/completions",  "https://api.moonshot.cn/v1/models",          "moonshot-v1-8k", 0 },
+    { "ark",         "火山方舟 ARK（豆包）",        "https://ark.cn-beijing.volces.com",  "/api/v3/chat/completions","https://ark.cn-beijing.volces.com/api/v3/models", "", 0 },
+    { "openrouter",  "OpenRouter",                 "https://openrouter.ai/api",          "/v1/chat/completions",  "https://openrouter.ai/api/v1/models",        "", 0 },
+    { "groq",        "Groq",                       "https://api.groq.com/openai",        "/v1/chat/completions",  "https://api.groq.com/openai/v1/models",      "", 0 },
+    { "siliconflow", "SiliconFlow（硅基流动）",     "https://api.siliconflow.cn",         "/v1/chat/completions",  "https://api.siliconflow.cn/v1/models",       "deepseek-ai/DeepSeek-V3", 0 },
+    { "ollama",      "Ollama（本地）",              "http://localhost:11434",             "/v1/chat/completions",  "http://localhost:11434/api/tags",           "qwen2.5:0.5b-instruct", 1 },
+    { "llamacpp",    "llama.cpp（本地 GGUF）",      "http://localhost:8000",              "/v1/chat/completions",  "http://localhost:8000/v1/models",           "qwen2.5-0.5b-instruct", 1 },
 };
 
 int vendors_count(void) { return (int)(sizeof(VENDORS) / sizeof(VENDORS[0])); }

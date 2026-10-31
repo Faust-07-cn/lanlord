@@ -1,9 +1,19 @@
 {
-	"active":	"deepseek",
-	"providers":	[{
-			"name":	"deepseek",
-			"base_url":	"https://api.deepseek.com",
-			"endpoint":	"/v1/chat/completions",
-			"model":	"deepseek-chat"
-		}]
+	"active": "llamacpp",
+	"providers": [
+		{
+			"name": "deepseek",
+			"base_url": "https://api.deepseek.com",
+			"endpoint": "/v1/chat/completions",
+			"model": "deepseek-chat",
+			"no_auth": false
+		},
+		{
+			"name": "llamacpp",
+			"base_url": "http://localhost:8000",
+			"endpoint": "/v1/chat/completions",
+			"model": "qwen2.5-0.5b-instruct",
+			"no_auth": true
+		}
+	]
 }

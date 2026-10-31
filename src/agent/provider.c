@@ -16,6 +16,13 @@ static const char *jstr(const cJSON *o, const char *k) {
     return cJSON_IsString(it) ? it->valuestring : "";
 }
 
+static int jboolv(const cJSON *o, const char *k) {
+    const cJSON *it = o ? cJSON_GetObjectItemCaseSensitive(o, k) : NULL;
+    if (cJSON_IsBool(it)) return cJSON_IsTrue(it) ? 1 : 0;
+    if (cJSON_IsNumber(it)) return it->valueint != 0;
+    return 0;
+}
+
 int provider_list_load(const char *path, ProviderList *pl) {
     provider_list_init(pl);
     FILE *f = fopen(path, "rb");
@@ -45,6 +52,7 @@ int provider_list_load(const char *path, ProviderList *pl) {
             snprintf(p->base_url, sizeof(p->base_url), "%s", jstr(po, "base_url"));
             snprintf(p->endpoint, sizeof(p->endpoint), "%s", jstr(po, "endpoint"));
             snprintf(p->model, sizeof(p->model), "%s", jstr(po, "model"));
+            p->no_auth = jboolv(po, "no_auth");
         }
     }
     cJSON_Delete(root);
@@ -61,6 +69,7 @@ int provider_list_save(const char *path, const ProviderList *pl) {
         cJSON_AddStringToObject(o, "base_url", pl->items[i].base_url);
         cJSON_AddStringToObject(o, "endpoint", pl->items[i].endpoint);
         cJSON_AddStringToObject(o, "model", pl->items[i].model);
+        cJSON_AddBoolToObject(o, "no_auth", pl->items[i].no_auth ? 1 : 0);
         cJSON_AddItemToArray(arr, o);
     }
     cJSON_AddItemToObject(root, "providers", arr);

@@ -279,7 +279,7 @@ async function refreshProviders() {
       const div = document.createElement('div');
       div.className = 'node';
       const tag = active ? ' <span class="badge">当前</span>' : '';
-      const keyTag = pr.has_key ? '<span class="dim" style="color:#9fe8a9"> Key ✓</span>' : '<span class="dim" style="color:#f0b429"> Key ✗</span>';
+      const keyTag = pr.no_auth ? '<span class="dim" style="color:#9fe8a9"> 本地免 Key</span>' : (pr.has_key ? '<span class="dim" style="color:#9fe8a9"> Key ✓</span>' : '<span class="dim" style="color:#f0b429"> Key ✗</span>');
       div.innerHTML = '<span class="' + (active ? 'gw' : 'host') + '">' + escapeHtml(pr.name) + '</span>' + tag + keyTag +
         '<div class="dim" style="margin-left:12px;word-break:break-all">' + escapeHtml(pr.base_url) + escapeHtml(pr.endpoint) + ' · ' + escapeHtml(pr.model) + '</div>';
       const btns = document.createElement('div');
@@ -309,6 +309,7 @@ async function refreshVendors() {
       o.dataset.base = v.base_url || '';
       o.dataset.endpoint = v.endpoint || '';
       o.dataset.model = v.default_model || '';
+      o.dataset.no_auth = v.no_auth ? '1' : '0';
       sel.appendChild(o);
     });
   } catch (e) {}
@@ -479,7 +480,6 @@ $('#prov-vendor').addEventListener('change', () => {
 
 $('#btn-prov-models').addEventListener('click', async () => {
   const key = $('#prov-key').value.trim();
-  if (!key) { alert('请先填写 API Key'); return; }
   const payload = { api_key: key, base_url: $('#prov-base').value.trim() };
   const name = $('#prov-name').value.trim();
   if (name) payload.name = name;
@@ -500,8 +500,10 @@ $('#btn-prov').addEventListener('click', async () => {
   const ep = $('#prov-endpoint').value.trim();
   const model = $('#prov-model').value.trim();
   const key = $('#prov-key').value.trim();
+  const vendSel = $('#prov-vendor').selectedOptions[0];
+  const no_auth = !!(vendSel && vendSel.dataset.no_auth === '1');
   if (!name || !base || !ep) { alert('请填写名称/调用地址/请求地址'); return; }
-  await api('/api/providers', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name, base_url: base, endpoint: ep, model})});
+  await api('/api/providers', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name, base_url: base, endpoint: ep, model, no_auth})});
   if (key) await api('/api/provider/key', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name, api_key: key})});
   $('#prov-key').value = '';
   refreshProviders(); refreshStatus();

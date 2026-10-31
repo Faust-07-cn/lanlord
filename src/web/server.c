@@ -134,7 +134,7 @@ static void api_status(SOCKET s) {
     }
     cJSON_AddStringToObject(o, "provider", p && p->name[0] ? p->name : "");
     cJSON_AddStringToObject(o, "model", p ? p->model : "");
-    cJSON_AddBoolToObject(o, "agent_ready", (p && has_key) ? 1 : 0);
+    cJSON_AddBoolToObject(o, "agent_ready", (p && (p->no_auth || has_key)) ? 1 : 0);
     cJSON_AddStringToObject(o, "authorization", risk_auth_mode_str());
     cJSON_AddNumberToObject(o, "rollback_count", rollback_applied_count());
     send_json(s, o);
@@ -333,6 +333,7 @@ static void api_providers_get(SOCKET s) {
         cJSON_AddStringToObject(po, "base_url", p->base_url);
         cJSON_AddStringToObject(po, "endpoint", p->endpoint);
         cJSON_AddStringToObject(po, "model", p->model);
+        cJSON_AddBoolToObject(po, "no_auth", p->no_auth ? 1 : 0);
         cJSON_AddBoolToObject(po, "has_key", has ? 1 : 0);
         cJSON_AddItemToArray(arr, po);
     }
@@ -342,12 +343,13 @@ static void api_providers_get(SOCKET s) {
 }
 
 static void api_providers_post(SOCKET s, cJSON *body) {
-    const char *name = ""; const char *base = ""; const char *ep = ""; const char *model = "";
+    const char *name = ""; const char *base = ""; const char *ep = ""; const char *model = ""; int no_auth = 0;
     cJSON *tmp;
     if ((tmp = cJSON_GetObjectItemCaseSensitive(body, "name")) && cJSON_IsString(tmp)) name = tmp->valuestring;
     if ((tmp = cJSON_GetObjectItemCaseSensitive(body, "base_url")) && cJSON_IsString(tmp)) base = tmp->valuestring;
     if ((tmp = cJSON_GetObjectItemCaseSensitive(body, "endpoint")) && cJSON_IsString(tmp)) ep = tmp->valuestring;
     if ((tmp = cJSON_GetObjectItemCaseSensitive(body, "model")) && cJSON_IsString(tmp)) model = tmp->valuestring;
+    if ((tmp = cJSON_GetObjectItemCaseSensitive(body, "no_auth"))) no_auth = cJSON_IsTrue(tmp) ? 1 : (cJSON_IsNumber(tmp) ? (tmp->valueint != 0) : 0);
     if (!name[0] || !base[0] || !ep[0]) { send_err(s, 400, "name/base_url/endpoint required"); return; }
 
     ProviderList pl;
@@ -361,6 +363,7 @@ static void api_providers_post(SOCKET s, cJSON *body) {
     snprintf(p->base_url, sizeof(p->base_url), "%s", base);
     snprintf(p->endpoint, sizeof(p->endpoint), "%s", ep);
     snprintf(p->model, sizeof(p->model), "%s", model);
+    p->no_auth = no_auth;
     if (!pl.active[0]) snprintf(pl.active, sizeof(pl.active), "%s", name);
     provider_list_save(g_cfg->providers_path, &pl);
 
@@ -411,6 +414,7 @@ static void api_vendors_get(SOCKET s) {
         cJSON_AddStringToObject(o, "base_url", v->base_url);
         cJSON_AddStringToObject(o, "endpoint", v->endpoint);
         cJSON_AddStringToObject(o, "default_model", v->default_model);
+        cJSON_AddBoolToObject(o, "no_auth", v->no_auth ? 1 : 0);
         cJSON_AddItemToArray(arr, o);
     }
     send_json(s, arr);
@@ -423,8 +427,7 @@ static void api_provider_models(SOCKET s, cJSON *body) {
     if ((tmp = cJSON_GetObjectItemCaseSensitive(body, "name")) && cJSON_IsString(tmp)) name = tmp->valuestring;
     if ((tmp = cJSON_GetObjectItemCaseSensitive(body, "base_url")) && cJSON_IsString(tmp)) base = tmp->valuestring;
     if ((tmp = cJSON_GetObjectItemCaseSensitive(body, "api_key")) && cJSON_IsString(tmp)) key = tmp->valuestring;
-    if (!key[0]) { send_err(s, 400, "api_key required"); return; }
-    log_redact(key);
+    if (key[0]) log_redact(key);
 
     const char *models_url = NULL;
     char derived[600];

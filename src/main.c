@@ -298,11 +298,14 @@ int main(int argc, char **argv) {
         } else { fprintf(stderr, "无法确定模型列表地址（先 --provider-add 或选择已知供应商）\n"); return E_ARG; }
 
         char key[512];
-        if (keystore_get(cfg.apikeys_path, argv[2], key, sizeof(key)) != E_OK || !key[0]) {
-            fprintf(stderr, "提供方「%s」尚未设置 API Key\n", argv[2]);
-            return E_AUTH;
+        key[0] = 0;
+        if (!((p && p->no_auth) || (vp && vp->no_auth))) {
+            if (keystore_get(cfg.apikeys_path, argv[2], key, sizeof(key)) != E_OK || !key[0]) {
+                fprintf(stderr, "提供方「%s」尚未设置 API Key\n", argv[2]);
+                return E_AUTH;
+            }
+            log_redact(key);
         }
-        log_redact(key);
         printf("模型列表地址: %s\n", models_url);
         char *arr = vendor_models_fetch(models_url, key, cfg.agent.timeout_s);
         zeroize(key, sizeof(key));

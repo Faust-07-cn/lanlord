@@ -10,6 +10,7 @@ typedef struct {
     char base_url[256];   /* 调用地址：scheme://host[:port] */
     char endpoint[256];   /* 请求地址：完整路径，如 /v1/chat/completions */
     char model[128];      /* 模型名 */
+    int  no_auth;         /* 1 = 本地/免密钥提供方（如 Ollama/llama.cpp），不要求 API Key */
 } AgentProvider;
 
 typedef struct {

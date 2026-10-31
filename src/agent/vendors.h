@@ -10,6 +10,7 @@ typedef struct {
     const char *endpoint;      /* 请求地址 (chat/completions path) */
     const char *models_url;    /* 模型列表地址 (may be empty) */
     const char *default_model; /* 默认模型 (may be empty) */
+    int no_auth;               /* 1 = 本地/免密钥 */
 } VendorPreset;
 
 int vendors_count(void);

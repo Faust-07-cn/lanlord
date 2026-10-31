@@ -105,11 +105,13 @@ int agent_run(Vault *v, const Config *cfg, const char *requirement, char *out, s
 
     char api_key[512];
     api_key[0] = 0;
-    if (keystore_get(cfg->apikeys_path, p->name, api_key, sizeof(api_key)) != E_OK || !api_key[0]) {
-        snprintf(out, outlen, "提供方「%s」尚未设置 API Key（独立存储于 %s），请设置后重试。", p->name, cfg->apikeys_path);
-        return E_AUTH;
+    if (!p->no_auth) {
+        if (keystore_get(cfg->apikeys_path, p->name, api_key, sizeof(api_key)) != E_OK || !api_key[0]) {
+            snprintf(out, outlen, "提供方「%s」尚未设置 API Key（独立存储于 %s），请设置后重试。", p->name, cfg->apikeys_path);
+            return E_AUTH;
+        }
+        log_redact(api_key);
     }
-    log_redact(api_key);
 
     char answer[8192];
     answer[0] = 0;
@@ -136,7 +138,7 @@ int agent_run(Vault *v, const Config *cfg, const char *requirement, char *out, s
     int rc = E_OK;
     for (int turn = 0; turn < cfg->agent.max_turns; turn++) {
         cJSON *req = cJSON_CreateObject();
-        cJSON_AddStringToObject(req, "model", cfg->agent.model);
+        cJSON_AddStringToObject(req, "model", p->model);
         cJSON_AddItemReferenceToObject(req, "messages", messages);
         cJSON_AddItemReferenceToObject(req, "tools", tools);
 
